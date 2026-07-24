@@ -1,0 +1,10 @@
+package com.cloudrec.repository;
+
+import com.cloudrec.entity.RecommendationHistory;
+import org.springframework.data.jpa.repository.JpaRepository;
+
+import java.util.List;
+
+public interface RecommendationHistoryRepository extends JpaRepository<RecommendationHistory, Long> {
+    List<RecommendationHistory> findTop20ByUserEmailOrderByCreatedAtDesc(String userEmail);
+}
