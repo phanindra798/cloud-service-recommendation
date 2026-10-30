@@ -53,7 +53,7 @@ class RecommendationControllerTest {
     @Test
     void recommendRequiresAuthentication() throws Exception {
         mvc.perform(post("/api/recommend").contentType(MediaType.APPLICATION_JSON).content("{\"problem\":\"x\"}"))
-                .andExpect(status().isForbidden());
+                .andExpect(status().isUnauthorized());
         verify(gemini, never()).getRecommendation(anyString());
     }
 
@@ -61,7 +61,12 @@ class RecommendationControllerTest {
     void invalidTokenIsRejected() throws Exception {
         mvc.perform(post("/api/recommend").header("Authorization", "Bearer not-a-real-token")
                         .contentType(MediaType.APPLICATION_JSON).content("{\"problem\":\"x\"}"))
-                .andExpect(status().isForbidden());
+                .andExpect(status().isUnauthorized());
+    }
+
+    @Test
+    void historyRequiresAuthentication() throws Exception {
+        mvc.perform(get("/api/history")).andExpect(status().isUnauthorized());
     }
 
     @Test
