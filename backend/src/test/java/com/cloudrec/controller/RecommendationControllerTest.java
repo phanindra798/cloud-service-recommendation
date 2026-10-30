@@ -126,6 +126,18 @@ class RecommendationControllerTest {
     }
 
     @Test
+    void unknownPathIs404Not500() throws Exception {
+        mvc.perform(get("/api/does-not-exist").header("Authorization", bearer("alice@example.com")))
+                .andExpect(status().isNotFound());
+    }
+
+    @Test
+    void wrongMethodIs405() throws Exception {
+        mvc.perform(get("/api/recommend").header("Authorization", bearer("alice@example.com")))
+                .andExpect(status().isMethodNotAllowed());
+    }
+
+    @Test
     void healthIsPublic() throws Exception {
         mvc.perform(get("/actuator/health")).andExpect(status().isOk())
                 .andExpect(jsonPath("$.status").value("UP"));
