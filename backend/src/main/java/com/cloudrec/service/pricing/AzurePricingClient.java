@@ -2,6 +2,8 @@ package com.cloudrec.service.pricing;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.event.ContextRefreshedEvent;
 import org.springframework.context.event.EventListener;
@@ -29,6 +31,8 @@ import java.util.concurrent.ConcurrentHashMap;
  */
 @Component
 public class AzurePricingClient {
+
+    private static final Logger log = LoggerFactory.getLogger(AzurePricingClient.class);
 
     private static final long CACHE_TTL_MS = 24 * 60 * 60 * 1000L;
     private static final double STORAGE_GB = 100.0;
@@ -121,7 +125,7 @@ public class AzurePricingClient {
                 }
             }
         } catch (Exception e) {
-            System.out.println("Azure pricing error for " + azureService + ": " + e.getMessage());
+            log.warn("Azure pricing lookup failed for {}: {}", azureService, e.toString());
         }
         return Optional.empty();
     }

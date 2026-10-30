@@ -5,6 +5,8 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
@@ -23,6 +25,8 @@ import java.util.List;
  */
 @Service
 public class GeminiService {
+
+    private static final Logger log = LoggerFactory.getLogger(GeminiService.class);
 
     private final String apiKey;
     private final String apiUrl;
@@ -89,7 +93,7 @@ public class GeminiService {
             HttpResponse<String> response = http.send(request, HttpResponse.BodyHandlers.ofString());
 
             if (response.statusCode() != 200) {
-                System.out.println("Gemini HTTP " + response.statusCode() + ": " + response.body());
+                log.warn("Gemini returned HTTP {}, using fallback: {}", response.statusCode(), abbreviate(response.body()));
                 return fallback();
             }
 
@@ -119,9 +123,13 @@ public class GeminiService {
             );
 
         } catch (Exception e) {
-            System.out.println("Gemini error: " + e.getMessage());
+            log.warn("Gemini call failed, using fallback: {}", e.toString());
             return fallback();
         }
+    }
+
+    private static String abbreviate(String s) {
+        return s.length() <= 500 ? s : s.substring(0, 500) + "…";
     }
 
     private GeminiResult fallback() {
