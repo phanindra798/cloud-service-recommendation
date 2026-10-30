@@ -1,5 +1,6 @@
 package com.cloudrec.service.pricing;
 
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
@@ -22,11 +23,13 @@ class CostServiceTest {
     @Mock
     private GcpCsvPricing gcp;
 
+    private final SimpleMeterRegistry meters = new SimpleMeterRegistry();
+
     @Test
     void mapsServicesToEquivalentsOnEveryProvider() {
         noLivePrices();
 
-        Map<String, Object> result = new CostService(azure, gcp).process(List.of("EC2", "S3", "DynamoDB"));
+        Map<String, Object> result = new CostService(azure, gcp, meters).process(List.of("EC2", "S3", "DynamoDB"));
 
         assertThat(result.get("aws")).isEqualTo(List.of("EC2", "S3", "DynamoDB"));
         assertThat(result.get("azure")).isEqualTo(List.of("Virtual Machines", "Blob Storage", "Cosmos DB"));
@@ -37,7 +40,7 @@ class CostServiceTest {
     void usesBaselinesWhenNoLivePricing() {
         noLivePrices();
 
-        Map<String, Object> result = new CostService(azure, gcp).process(List.of("EC2", "RDS"));
+        Map<String, Object> result = new CostService(azure, gcp, meters).process(List.of("EC2", "RDS"));
 
         assertThat(cost(result)).containsEntry("aws", 23.0).containsEntry("azure", 25.0).containsEntry("gcp", 21.0);
         assertThat(result.get("best")).isEqualTo("GCP");
@@ -53,7 +56,7 @@ class CostServiceTest {
         when(gcp.getMonthlyPrice("Compute Engine")).thenReturn(Optional.of(30.0));
         when(gcp.getMonthlyPrice("Cloud SQL")).thenReturn(Optional.empty());
 
-        Map<String, Object> result = new CostService(azure, gcp).process(List.of("EC2", "RDS"));
+        Map<String, Object> result = new CostService(azure, gcp, meters).process(List.of("EC2", "RDS"));
 
         // Azure: 1.25 live + 16.0 baseline; GCP: 30.0 csv + 14.0 baseline
         assertThat(cost(result)).containsEntry("azure", 17.25).containsEntry("gcp", 44.0);
@@ -63,11 +66,23 @@ class CostServiceTest {
     }
 
     @Test
+    void countsAzureFallbacksPerService() {
+        when(azure.getMonthlyPrice("Virtual Machines")).thenReturn(Optional.of(30.0));
+        when(azure.getMonthlyPrice("SQL Database")).thenReturn(Optional.empty());
+        lenient().when(gcp.getMonthlyPrice(anyString())).thenReturn(Optional.empty());
+
+        new CostService(azure, gcp, meters).process(List.of("EC2", "RDS"));
+
+        assertThat(meters.get("pricing.azure.fallbacks").tag("service", "SQL Database").counter().count()).isEqualTo(1.0);
+        assertThat(meters.find("pricing.azure.fallbacks").tag("service", "Virtual Machines").counter()).isNull();
+    }
+
+    @Test
     void awsWinsTies() {
         when(azure.getMonthlyPrice(anyString())).thenReturn(Optional.of(8.0));
         when(gcp.getMonthlyPrice(anyString())).thenReturn(Optional.of(8.0));
 
-        assertThat(new CostService(azure, gcp).process(List.of("EC2")).get("best")).isEqualTo("AWS");
+        assertThat(new CostService(azure, gcp, meters).process(List.of("EC2")).get("best")).isEqualTo("AWS");
     }
 
     @Test
@@ -75,7 +90,7 @@ class CostServiceTest {
         when(azure.getMonthlyPrice(anyString())).thenReturn(Optional.of(1.0 / 3));
         lenient().when(gcp.getMonthlyPrice(anyString())).thenReturn(Optional.empty());
 
-        Map<String, Object> result = new CostService(azure, gcp).process(List.of("EC2", "S3"));
+        Map<String, Object> result = new CostService(azure, gcp, meters).process(List.of("EC2", "S3"));
 
         assertThat(cost(result).get("azure")).isEqualTo(0.67);
     }
@@ -84,7 +99,7 @@ class CostServiceTest {
     void unknownServicesAreIgnored() {
         noLivePrices();
 
-        Map<String, Object> result = new CostService(azure, gcp).process(List.of("EC2", "Kinesis"));
+        Map<String, Object> result = new CostService(azure, gcp, meters).process(List.of("EC2", "Kinesis"));
 
         assertThat(result.get("azure")).isEqualTo(List.of("Virtual Machines"));
         assertThat(cost(result)).containsEntry("aws", 8.0);

@@ -1,6 +1,7 @@
 package com.cloudrec.service;
 
 import com.cloudrec.support.MutableClock;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.junit.jupiter.api.Test;
 
 import java.time.Duration;
@@ -15,7 +16,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 class RateLimiterServiceTest {
 
     private final MutableClock clock = new MutableClock(Instant.parse("2026-01-01T00:00:00Z"));
-    private final RateLimiterService limiter = new RateLimiterService(clock);
+    private final SimpleMeterRegistry meters = new SimpleMeterRegistry();
+    private final RateLimiterService limiter = new RateLimiterService(clock, meters);
 
     @Test
     void allowsUpToTenRequestsThenBlocks() {
@@ -23,6 +25,7 @@ class RateLimiterServiceTest {
             assertThat(limiter.allow("alice@example.com")).as("request %d", i + 1).isTrue();
         }
         assertThat(limiter.allow("alice@example.com")).isFalse();
+        assertThat(meters.get("ratelimit.rejections").counter().count()).isEqualTo(1.0);
     }
 
     @Test
@@ -62,6 +65,7 @@ class RateLimiterServiceTest {
         clock.advance(Duration.ofSeconds(30));
         limiter.evictIdle();
         assertThat(limiter.trackedUsers()).isZero();
+        assertThat(meters.get("ratelimit.tracked.users").gauge().value()).isZero();
     }
 
     @Test

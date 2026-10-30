@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import io.micrometer.core.instrument.MeterRegistry;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
@@ -30,6 +31,7 @@ public class GeminiService {
 
     private final String apiKey;
     private final String apiUrl;
+    private final MeterRegistry meters;
 
     private final ObjectMapper mapper = new ObjectMapper();
     private final HttpClient http = HttpClient.newBuilder()
@@ -38,9 +40,11 @@ public class GeminiService {
 
     public GeminiService(
             @Value("${gemini.api.key}") String apiKey,
-            @Value("${gemini.api.url:https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent}") String apiUrl) {
+            @Value("${gemini.api.url:https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent}") String apiUrl,
+            MeterRegistry meters) {
         this.apiKey = apiKey;
         this.apiUrl = apiUrl;
+        this.meters = meters;
     }
 
     public record GeminiResult(List<String> services, String reasoning, String mermaid, boolean fromFallback) {}
@@ -94,7 +98,7 @@ public class GeminiService {
 
             if (response.statusCode() != 200) {
                 log.warn("Gemini returned HTTP {}, using fallback: {}", response.statusCode(), abbreviate(response.body()));
-                return fallback();
+                return fallback("http_error");
             }
 
             JsonNode root = mapper.readTree(response.body());
@@ -112,7 +116,8 @@ public class GeminiService {
                 }
             });
             if (services.isEmpty()) {
-                return fallback();
+                log.warn("Gemini returned no supported services, using fallback");
+                return fallback("no_services");
             }
 
             return new GeminiResult(
@@ -124,7 +129,7 @@ public class GeminiService {
 
         } catch (Exception e) {
             log.warn("Gemini call failed, using fallback: {}", e.toString());
-            return fallback();
+            return fallback("exception");
         }
     }
 
@@ -132,7 +137,8 @@ public class GeminiService {
         return s.length() <= 500 ? s : s.substring(0, 500) + "…";
     }
 
-    private GeminiResult fallback() {
+    private GeminiResult fallback(String reason) {
+        meters.counter("gemini.failures", "reason", reason).increment();
         return new GeminiResult(
                 List.of("EC2", "S3", "RDS", "CloudFront"),
                 "AI service is currently unavailable. Showing a baseline web application "

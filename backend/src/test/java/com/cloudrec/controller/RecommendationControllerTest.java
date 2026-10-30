@@ -16,6 +16,8 @@ import org.springframework.test.web.servlet.ResultActions;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.hamcrest.Matchers.greaterThanOrEqualTo;
+import static org.hamcrest.Matchers.hasItem;
 import static org.hamcrest.Matchers.hasSize;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.never;
@@ -121,6 +123,34 @@ class RecommendationControllerTest {
         recommend("ratelimited@example.com", "one too many")
                 .andExpect(status().isTooManyRequests())
                 .andExpect(jsonPath("$.error").value("Rate limit exceeded: max 10 requests per minute"));
+    }
+
+    @Test
+    void healthIsPublic() throws Exception {
+        mvc.perform(get("/actuator/health")).andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("UP"));
+    }
+
+    @Test
+    void metricsRequireAuthentication() throws Exception {
+        mvc.perform(get("/actuator/metrics")).andExpect(status().isUnauthorized());
+    }
+
+    @Test
+    void recordsRecommendationLatencyAndRateLimitRejections() throws Exception {
+        for (int i = 0; i < 11; i++) {
+            recommend("metrics@example.com", "idea " + i);
+        }
+
+        mvc.perform(get("/actuator/metrics/recommendation.latency").param("tag", "source:ai")
+                        .header("Authorization", bearer("metrics@example.com")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.measurements[?(@.statistic == 'COUNT')].value").value(hasItem(greaterThanOrEqualTo(10.0))));
+
+        mvc.perform(get("/actuator/metrics/ratelimit.rejections")
+                        .header("Authorization", bearer("metrics@example.com")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.measurements[0].value").value(greaterThanOrEqualTo(1.0)));
     }
 
     private ResultActions recommend(String email, String problem) throws Exception {

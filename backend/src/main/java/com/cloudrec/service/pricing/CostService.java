@@ -1,5 +1,6 @@
 package com.cloudrec.service.pricing;
 
+import io.micrometer.core.instrument.MeterRegistry;
 import org.springframework.stereotype.Service;
 
 import java.util.ArrayList;
@@ -22,10 +23,12 @@ public class CostService {
 
     private final AzurePricingClient azurePricing;
     private final GcpCsvPricing gcpPricing;
+    private final MeterRegistry meters;
 
-    public CostService(AzurePricingClient azurePricing, GcpCsvPricing gcpPricing) {
+    public CostService(AzurePricingClient azurePricing, GcpCsvPricing gcpPricing, MeterRegistry meters) {
         this.azurePricing = azurePricing;
         this.gcpPricing = gcpPricing;
+        this.meters = meters;
     }
 
     public Map<String, Object> process(List<String> awsServices) {
@@ -51,7 +54,10 @@ public class CostService {
         double azureTotal = round(azure.stream()
                 .mapToDouble(s -> azurePricing.getMonthlyPrice(s)
                         .map(p -> { azureLiveUsed[0] = true; return p; })
-                        .orElse(ServiceCatalog.AZURE_BASELINE.getOrDefault(s, 0.0)))
+                        .orElseGet(() -> {
+                            meters.counter("pricing.azure.fallbacks", "service", s).increment();
+                            return ServiceCatalog.AZURE_BASELINE.getOrDefault(s, 0.0);
+                        }))
                 .sum());
 
         double gcpTotal = round(gcp.stream()

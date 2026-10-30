@@ -1,5 +1,8 @@
 package com.cloudrec.service;
 
+import io.micrometer.core.instrument.Counter;
+import io.micrometer.core.instrument.MeterRegistry;
+import io.micrometer.core.instrument.Tags;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 
@@ -25,9 +28,12 @@ public class RateLimiterService {
 
     private final Map<String, Deque<Long>> requests = new ConcurrentHashMap<>();
     private final Clock clock;
+    private final Counter rejections;
 
-    public RateLimiterService(Clock clock) {
+    public RateLimiterService(Clock clock, MeterRegistry meters) {
         this.clock = clock;
+        this.rejections = meters.counter("ratelimit.rejections");
+        meters.gaugeMapSize("ratelimit.tracked.users", Tags.empty(), requests);
     }
 
     public boolean allow(String key) {
@@ -40,6 +46,7 @@ public class RateLimiterService {
 
                 prune(timestamps, now);
                 if (timestamps.size() >= MAX_REQUESTS) {
+                    rejections.increment();
                     return false;
                 }
                 timestamps.addLast(now);

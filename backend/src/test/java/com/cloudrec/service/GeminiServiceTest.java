@@ -4,6 +4,7 @@ import com.cloudrec.service.pricing.ServiceCatalog;
 import com.cloudrec.support.StubHttpServer;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -16,13 +17,14 @@ import static org.assertj.core.api.Assertions.assertThat;
 class GeminiServiceTest {
 
     private final ObjectMapper mapper = new ObjectMapper();
+    private final SimpleMeterRegistry meters = new SimpleMeterRegistry();
     private StubHttpServer server;
     private GeminiService gemini;
 
     @BeforeEach
     void setUp() throws Exception {
         server = new StubHttpServer();
-        gemini = new GeminiService("test-key", server.url("/generate"));
+        gemini = new GeminiService("test-key", server.url("/generate"), meters);
     }
 
     @AfterEach
@@ -43,6 +45,7 @@ class GeminiServiceTest {
         assertThat(result.services()).containsExactly("Lambda", "DynamoDB", "API Gateway");
         assertThat(result.reasoning()).isEqualTo("Serverless keeps costs low.");
         assertThat(result.mermaid()).startsWith("graph TD");
+        assertThat(meters.find("gemini.failures").counters()).isEmpty();
     }
 
     @Test
@@ -79,6 +82,7 @@ class GeminiServiceTest {
         server.respond(200, geminiResponse(Map.of("services", List.of("Kinesis"), "reasoning", "r", "mermaid", "m")));
 
         assertFallback(gemini.getRecommendation("x"));
+        assertThat(failures("no_services")).isEqualTo(1.0);
     }
 
     @Test
@@ -86,6 +90,7 @@ class GeminiServiceTest {
         server.respond(429, "{\"error\":{\"message\":\"quota exceeded\"}}");
 
         assertFallback(gemini.getRecommendation("x"));
+        assertThat(failures("http_error")).isEqualTo(1.0);
     }
 
     @Test
@@ -93,13 +98,19 @@ class GeminiServiceTest {
         server.respond(200, "this is not json");
 
         assertFallback(gemini.getRecommendation("x"));
+        assertThat(failures("exception")).isEqualTo(1.0);
     }
 
     @Test
     void fallsBackWhenApiUnreachable() {
-        GeminiService unreachable = new GeminiService("k", "http://127.0.0.1:1/generate");
+        GeminiService unreachable = new GeminiService("k", "http://127.0.0.1:1/generate", meters);
 
         assertFallback(unreachable.getRecommendation("x"));
+        assertThat(failures("exception")).isEqualTo(1.0);
+    }
+
+    private double failures(String reason) {
+        return meters.get("gemini.failures").tag("reason", reason).counter().count();
     }
 
     private void assertFallback(GeminiService.GeminiResult result) {
