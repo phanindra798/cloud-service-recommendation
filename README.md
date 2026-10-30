@@ -31,10 +31,12 @@ those services fit, and a generated architecture diagram.
 - **Per-user history** — past recommendations stored in PostgreSQL and
   reloadable from the UI
 - **Rate limiting** — sliding window, 10 requests/minute per user, to
-  protect the AI quota
-- **Tested** — 55 backend tests (JUnit 5, Mockito, MockMvc, Testcontainers
-  PostgreSQL) and 30 frontend tests (Jest, React Testing Library), run on
-  every push by GitHub Actions
+  protect the AI quota; idle users are evicted so memory stays bounded
+- **Observability** — Spring Boot Actuator + Micrometer metrics (Prometheus
+  endpoint) and structured JSON logs with a request ID on every line
+- **Tested** — 70 backend tests (JUnit 5, Mockito, MockMvc, Testcontainers
+  PostgreSQL) with a JaCoCo coverage gate, and 30 frontend tests (Jest,
+  React Testing Library), run on every push by GitHub Actions
 - **Graceful degradation** — if Gemini or a pricing API is down, the app
   still answers with clearly labelled baseline data instead of failing
 
@@ -164,20 +166,27 @@ cd backend
 - **Unit tests** (JUnit 5 + Mockito + AssertJ): cost calculation and
   best-value selection, Azure price parsing/caching, GCP CSV loading, JWT
   issue/validate/expiry/tampering, BCrypt registration and login, the
-  sliding-window rate limiter (including under concurrency)
+  sliding-window rate limiter (window expiry and idle eviction driven by an
+  injected `Clock`, plus a concurrency test), metric counters, and the
+  request-ID filter
 - **HTTP client tests**: Gemini and Azure clients run against an in-process
   stub HTTP server, covering request shape (API key, prompt, response
   schema), parsing, and every fallback path (HTTP errors, malformed JSON,
   unreachable host)
 - **API tests** (`@SpringBootTest` + MockMvc on H2): register/login, JWT
-  enforcement, input validation, rate limiting (429), per-user history
+  enforcement (401), input validation (400), rate limiting (429), per-user
+  history, 404/405 handling, public health vs. protected metrics endpoints,
+  and the real JSON log output
 - **Repository tests** (`@DataJpaTest`): the top-20-newest history query
 - **PostgreSQL integration test** (Testcontainers, `postgres:16-alpine`):
   the full register → login → recommend → history journey and the unique
   email constraint against a real database. It needs Docker and is skipped
   automatically without it; it always runs in CI.
 
-A JaCoCo coverage report is written to `backend/target/site/jacoco/`.
+JaCoCo writes a report to `backend/target/site/jacoco/`, and `mvn verify`
+fails if coverage drops below 85% of lines or 75% of branches. Current
+coverage without Docker (Testcontainers test skipped): **95.2% lines,
+87.3% branches**.
 
 ### Frontend
 
@@ -198,6 +207,35 @@ result view, the Mermaid diagram fallback and the history panel.
 and uploads both coverage reports on every push to `main` and every pull
 request.
 
+## Observability
+
+**Metrics** (Micrometer, exposed at `/actuator/metrics` and in Prometheus
+format at `/actuator/prometheus`, both behind JWT auth):
+
+| Metric | Type | Tags | Meaning |
+|--------|------|------|---------|
+| `recommendation.latency` | timer (histogram) | `source=ai\|fallback` | end-to-end time for `/api/recommend` |
+| `gemini.failures` | counter | `reason=http_error\|no_services\|exception` | Gemini calls that fell back to the baseline |
+| `ratelimit.rejections` | counter | — | requests answered with 429 |
+| `ratelimit.tracked.users` | gauge | — | users currently held by the rate limiter |
+| `pricing.azure.fallbacks` | counter | `service` | Azure lookups that fell back to static prices |
+
+`/actuator/health` (with `liveness`/`readiness` groups for container
+probes) and `/actuator/info` are public.
+
+**Logs** are one JSON object per line in Elastic Common Schema. Every line
+written while handling a request carries `requestId` (taken from a safe
+incoming `X-Request-Id` header or generated, and echoed back in the
+response) and, once authenticated, `user`. Each request also gets one
+access-log line with `http.method`, `http.path`, `http.status` and
+`durationMs`:
+
+```json
+{"@timestamp":"…","log":{"level":"INFO","logger":"com.cloudrec.config.RequestIdFilter"},"message":"POST /api/recommend -> 200 in 1613 ms","user":"a@b.co","requestId":"71b0498f-…","http":{"method":"POST","path":"/api/recommend","status":200},"durationMs":1613,"ecs":{"version":"8.11"}}
+```
+
+Set `LOG_FORMAT=logstash` or `gelf` to switch format.
+
 ## API
 
 | Method | Path             | Auth   | Description |
@@ -206,6 +244,8 @@ request.
 | POST   | `/auth/login`    | none   | `{email, password}` → `{token, email}` |
 | POST   | `/api/recommend` | Bearer | `{problem}` → services, costs, reasoning, diagram |
 | GET    | `/api/history`   | Bearer | last 20 recommendations for the user |
+| GET    | `/actuator/health` | none | health with liveness/readiness groups |
+| GET    | `/actuator/prometheus` | Bearer | metrics in Prometheus format |
 
 ## Configuration notes
 
