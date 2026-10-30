@@ -1,7 +1,10 @@
 package com.cloudrec.service.pricing;
 
 import jakarta.annotation.PostConstruct;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.core.io.ClassPathResource;
+import org.springframework.core.io.Resource;
 import org.springframework.stereotype.Component;
 
 import java.io.BufferedReader;
@@ -25,15 +28,20 @@ import java.util.concurrent.ConcurrentHashMap;
 @Component
 public class GcpCsvPricing {
 
+    private static final Logger log = LoggerFactory.getLogger(GcpCsvPricing.class);
+
     private final Map<String, Double> prices = new ConcurrentHashMap<>();
     private boolean loaded = false;
 
     @PostConstruct
     public void load() {
+        load(new ClassPathResource("pricing/gcp-prices.csv"));
+    }
+
+    void load(Resource resource) {
         try {
-            ClassPathResource resource = new ClassPathResource("pricing/gcp-prices.csv");
             if (!resource.exists()) {
-                System.out.println("GCP pricing CSV not found — using static baseline prices for GCP.");
+                log.info("GCP pricing CSV not found — using static baseline prices for GCP");
                 return;
             }
             try (BufferedReader reader = new BufferedReader(
@@ -50,9 +58,9 @@ public class GcpCsvPricing {
                 }
             }
             loaded = !prices.isEmpty();
-            System.out.println("Loaded " + prices.size() + " GCP prices from CSV.");
+            log.info("Loaded {} GCP prices from CSV", prices.size());
         } catch (Exception e) {
-            System.out.println("Failed to load GCP pricing CSV: " + e.getMessage());
+            log.warn("Failed to load GCP pricing CSV", e);
         }
     }
 

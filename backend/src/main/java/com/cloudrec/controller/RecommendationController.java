@@ -6,6 +6,8 @@ import com.cloudrec.repository.RecommendationHistoryRepository;
 import com.cloudrec.service.RateLimiterService;
 import com.cloudrec.service.RecommendationService;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.Authentication;
 import org.springframework.web.bind.annotation.*;
@@ -17,6 +19,8 @@ import java.util.Map;
 @RestController
 @RequestMapping("/api")
 public class RecommendationController {
+
+    private static final Logger log = LoggerFactory.getLogger(RecommendationController.class);
 
     private final RecommendationService service;
     private final RecommendationHistoryRepository historyRepo;
@@ -58,7 +62,7 @@ public class RecommendationController {
             entry.setCreatedAt(Instant.now());
             historyRepo.save(entry);
         } catch (Exception e) {
-            System.out.println("Failed to save history: " + e.getMessage());
+            log.error("Failed to save recommendation history for {}", email, e);
         }
 
         return ResponseEntity.ok(result);
