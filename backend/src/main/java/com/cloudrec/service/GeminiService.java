@@ -24,13 +24,20 @@ import java.util.List;
 @Service
 public class GeminiService {
 
-    @Value("${gemini.api.key}")
-    private String apiKey;
+    private final String apiKey;
+    private final String apiUrl;
 
     private final ObjectMapper mapper = new ObjectMapper();
     private final HttpClient http = HttpClient.newBuilder()
             .connectTimeout(Duration.ofSeconds(10))
             .build();
+
+    public GeminiService(
+            @Value("${gemini.api.key}") String apiKey,
+            @Value("${gemini.api.url:https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent}") String apiUrl) {
+        this.apiKey = apiKey;
+        this.apiUrl = apiUrl;
+    }
 
     public record GeminiResult(List<String> services, String reasoning, String mermaid, boolean fromFallback) {}
 
@@ -72,7 +79,7 @@ public class GeminiService {
             schema.putArray("required").add("services").add("reasoning").add("mermaid");
 
             HttpRequest request = HttpRequest.newBuilder()
-                    .uri(URI.create("https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent"))
+                    .uri(URI.create(apiUrl))
                     .header("Content-Type", "application/json")
                     .header("x-goog-api-key", apiKey)
                     .timeout(Duration.ofSeconds(30))

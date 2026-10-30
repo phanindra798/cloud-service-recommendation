@@ -1,5 +1,7 @@
 # Cloud Service Recommendation Platform
 
+[![CI](https://github.com/phanindra798/cloud-service-recommendation/actions/workflows/ci.yml/badge.svg)](https://github.com/phanindra798/cloud-service-recommendation/actions/workflows/ci.yml)
+
 Describe what you want to build in plain English — "a real-time chat app
 for 50k users with media sharing" — and get back a concrete cloud
 architecture: recommended services across **AWS, Azure and GCP**, an
@@ -30,6 +32,9 @@ those services fit, and a generated architecture diagram.
   reloadable from the UI
 - **Rate limiting** — sliding window, 10 requests/minute per user, to
   protect the AI quota
+- **Tested** — 55 backend tests (JUnit 5, Mockito, MockMvc, Testcontainers
+  PostgreSQL) and 30 frontend tests (Jest, React Testing Library), run on
+  every push by GitHub Actions
 - **Graceful degradation** — if Gemini or a pricing API is down, the app
   still answers with clearly labelled baseline data instead of failing
 
@@ -147,6 +152,52 @@ npm start
 
 Open http://localhost:3000, register an account and try a prompt.
 
+## Testing
+
+### Backend
+
+```bash
+cd backend
+./mvnw verify
+```
+
+- **Unit tests** (JUnit 5 + Mockito + AssertJ): cost calculation and
+  best-value selection, Azure price parsing/caching, GCP CSV loading, JWT
+  issue/validate/expiry/tampering, BCrypt registration and login, the
+  sliding-window rate limiter (including under concurrency)
+- **HTTP client tests**: Gemini and Azure clients run against an in-process
+  stub HTTP server, covering request shape (API key, prompt, response
+  schema), parsing, and every fallback path (HTTP errors, malformed JSON,
+  unreachable host)
+- **API tests** (`@SpringBootTest` + MockMvc on H2): register/login, JWT
+  enforcement, input validation, rate limiting (429), per-user history
+- **Repository tests** (`@DataJpaTest`): the top-20-newest history query
+- **PostgreSQL integration test** (Testcontainers, `postgres:16-alpine`):
+  the full register → login → recommend → history journey and the unique
+  email constraint against a real database. It needs Docker and is skipped
+  automatically without it; it always runs in CI.
+
+A JaCoCo coverage report is written to `backend/target/site/jacoco/`.
+
+### Frontend
+
+```bash
+cd frontend
+npm test               # watch mode
+npm run test:ci        # single run with coverage
+```
+
+Jest + React Testing Library tests cover routing and auth guards, the
+login and register forms (validation, API errors, redirects), the home page
+request flow (JWT header, 429 and error handling, expired sessions), the
+result view, the Mermaid diagram fallback and the history panel.
+
+### CI
+
+`.github/workflows/ci.yml` runs both suites, the production frontend build,
+and uploads both coverage reports on every push to `main` and every pull
+request.
+
 ## API
 
 | Method | Path             | Auth   | Description |
@@ -176,4 +227,3 @@ Open http://localhost:3000, register an account and try a prompt.
 - Region selector for cost estimates
 - Clarifying-questions flow before recommending
 - Terraform export of the recommended stack
-- JUnit + Testcontainers test suite and CI pipeline

@@ -2,6 +2,7 @@ package com.cloudrec.service.pricing;
 
 import jakarta.annotation.PostConstruct;
 import org.springframework.core.io.ClassPathResource;
+import org.springframework.core.io.Resource;
 import org.springframework.stereotype.Component;
 
 import java.io.BufferedReader;
@@ -30,8 +31,11 @@ public class GcpCsvPricing {
 
     @PostConstruct
     public void load() {
+        load(new ClassPathResource("pricing/gcp-prices.csv"));
+    }
+
+    void load(Resource resource) {
         try {
-            ClassPathResource resource = new ClassPathResource("pricing/gcp-prices.csv");
             if (!resource.exists()) {
                 System.out.println("GCP pricing CSV not found — using static baseline prices for GCP.");
                 return;
