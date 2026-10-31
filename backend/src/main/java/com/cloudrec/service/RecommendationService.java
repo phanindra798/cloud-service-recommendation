@@ -26,7 +26,7 @@ public class RecommendationService {
 
         GeminiService.GeminiResult result = geminiService.getRecommendation(input);
 
-        Map<String, Object> response = new HashMap<>(costService.process(result.services()));
+        Map<String, Object> response = new HashMap<>(costService.process(result.services(), result.usage()));
         response.put("reasoning", result.reasoning());
         response.put("mermaid", result.mermaid());
         response.put("aiGenerated", !result.fromFallback());

@@ -36,7 +36,7 @@ class AzurePricingClientTest {
                 ]}
                 """);
 
-        assertThat(client.getMonthlyPrice("Virtual Machines")).hasValueSatisfying(
+        assertThat(client.getUnitPrice("Virtual Machines")).hasValueSatisfying(
                 p -> assertThat(p).isCloseTo(36.5, within(0.001)));
     }
 
@@ -44,7 +44,7 @@ class AzurePricingClientTest {
     void queriesConfiguredRegionWithServiceFilter() {
         server.respond(200, "{\"Items\": [{\"productName\": \"SQL\", \"retailPrice\": 0.02, \"unitOfMeasure\": \"1 Hour\"}]}");
 
-        client.getMonthlyPrice("SQL Database");
+        client.getUnitPrice("SQL Database");
 
         String uri = URLDecoder.decode(server.requests().get(0).uri(), StandardCharsets.UTF_8);
         assertThat(uri).contains("serviceName eq 'SQL Database'").contains("armRegionName eq 'westeurope'");
@@ -52,10 +52,10 @@ class AzurePricingClientTest {
 
     @Test
     void cachesPricesBetweenCalls() {
-        server.respond(200, "{\"Items\": [{\"productName\": \"Storage\", \"retailPrice\": 0.02, \"unitOfMeasure\": \"1 GB/Month\"}]}");
+        server.respond(200, "{\"Items\": [{\"productName\": \"Storage\", \"retailPrice\": 0.0184, \"unitOfMeasure\": \"1 GB/Month\"}]}");
 
-        assertThat(client.getMonthlyPrice("Blob Storage")).contains(2.0);
-        assertThat(client.getMonthlyPrice("Blob Storage")).contains(2.0);
+        assertThat(client.getUnitPrice("Blob Storage")).contains(0.0184);
+        assertThat(client.getUnitPrice("Blob Storage")).contains(0.0184);
         assertThat(server.requests()).hasSize(1);
     }
 
@@ -63,29 +63,32 @@ class AzurePricingClientTest {
     void emptyWhenApiFails() {
         server.respond(500, "");
 
-        assertThat(client.getMonthlyPrice("Virtual Machines")).isEmpty();
+        assertThat(client.getUnitPrice("Virtual Machines")).isEmpty();
     }
 
     @Test
     void emptyWhenNoUsablePrice() {
         server.respond(200, "{\"Items\": [{\"productName\": \"X\", \"retailPrice\": 0, \"unitOfMeasure\": \"1 Hour\"}]}");
 
-        assertThat(client.getMonthlyPrice("Virtual Machines")).isEmpty();
+        assertThat(client.getUnitPrice("Virtual Machines")).isEmpty();
     }
 
     @Test
     void emptyForUnknownServiceWithoutCallingApi() {
-        assertThat(client.getMonthlyPrice("Quantum Computer")).isEmpty();
+        assertThat(client.supports("Quantum Computer")).isFalse();
+        assertThat(client.supports("Functions")).as("no meter matches its per-request unit").isFalse();
+        assertThat(client.supports("Virtual Machines")).isTrue();
+        assertThat(client.getUnitPrice("Quantum Computer")).isEmpty();
         assertThat(server.requests()).isEmpty();
     }
 
     @Test
-    void toMonthlyHandlesEachUnit() {
-        assertThat(AzurePricingClient.toMonthly(0.1, "1 Hour")).isCloseTo(73.0, within(0.001));
-        assertThat(AzurePricingClient.toMonthly(1.0, "1/Day")).isEqualTo(30.0);
-        assertThat(AzurePricingClient.toMonthly(0.02, "1 GB/Month")).isCloseTo(2.0, within(0.001));
-        assertThat(AzurePricingClient.toMonthly(50.0, "1/Month")).isEqualTo(50.0);
-        assertThat(AzurePricingClient.toMonthly(0.01, "1 GB")).isCloseTo(1.0, within(0.001));
-        assertThat(AzurePricingClient.toMonthly(1.0, "10K Transactions")).isNull();
+    void toUnitPriceHandlesEachUnit() {
+        assertThat(AzurePricingClient.toUnitPrice(0.1, "1 Hour")).isCloseTo(73.0, within(0.001));
+        assertThat(AzurePricingClient.toUnitPrice(1.0, "1/Day")).isEqualTo(30.0);
+        assertThat(AzurePricingClient.toUnitPrice(0.02, "1 GB/Month")).isEqualTo(0.02);
+        assertThat(AzurePricingClient.toUnitPrice(50.0, "1/Month")).isEqualTo(50.0);
+        assertThat(AzurePricingClient.toUnitPrice(0.081, "1 GB")).isEqualTo(0.081);
+        assertThat(AzurePricingClient.toUnitPrice(1.0, "10K Transactions")).isNull();
     }
 }

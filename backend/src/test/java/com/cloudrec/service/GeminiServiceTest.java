@@ -1,6 +1,7 @@
 package com.cloudrec.service;
 
 import com.cloudrec.service.pricing.ServiceCatalog;
+import com.cloudrec.service.pricing.UsageProfile;
 import com.cloudrec.support.StubHttpServer;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -37,7 +38,9 @@ class GeminiServiceTest {
         server.respond(200, geminiResponse(Map.of(
                 "services", List.of("Lambda", "DynamoDB", "API Gateway"),
                 "reasoning", "Serverless keeps costs low.",
-                "mermaid", "graph TD; User-->APIGateway; APIGateway-->Lambda; Lambda-->DynamoDB;")));
+                "mermaid", "graph TD; User-->APIGateway; APIGateway-->Lambda; Lambda-->DynamoDB;",
+                "usage", Map.of("monthlyActiveUsers", 50_000, "requestsPerMonth", 30_000_000,
+                        "storageGb", 200, "dataTransferGb", 1_500))));
 
         GeminiService.GeminiResult result = gemini.getRecommendation("a todo app");
 
@@ -45,6 +48,7 @@ class GeminiServiceTest {
         assertThat(result.services()).containsExactly("Lambda", "DynamoDB", "API Gateway");
         assertThat(result.reasoning()).isEqualTo("Serverless keeps costs low.");
         assertThat(result.mermaid()).startsWith("graph TD");
+        assertThat(result.usage()).isEqualTo(new UsageProfile(50_000, 30_000_000, 200, 1_500));
         assertThat(meters.find("gemini.failures").counters()).isEmpty();
     }
 
@@ -65,6 +69,9 @@ class GeminiServiceTest {
         List<String> allowed = mapper.convertValue(
                 body.at("/generationConfig/responseSchema/properties/services/items/enum"), List.class);
         assertThat(allowed).containsExactlyElementsOf(ServiceCatalog.SUPPORTED_AWS_SERVICES);
+        assertThat(body.at("/generationConfig/responseSchema/required").toString()).contains("usage");
+        assertThat(body.at("/generationConfig/responseSchema/properties/usage/properties/requestsPerMonth/type").asText())
+                .isEqualTo("INTEGER");
     }
 
     @Test
@@ -75,6 +82,26 @@ class GeminiServiceTest {
                 "mermaid", "m")));
 
         assertThat(gemini.getRecommendation("x").services()).containsExactly("EC2", "S3");
+    }
+
+    @Test
+    void missingOrIncompleteUsageFallsBackToDefaultProfile() throws Exception {
+        server.respond(200, geminiResponse(Map.of("services", List.of("EC2"), "reasoning", "r", "mermaid", "m",
+                "usage", Map.of("monthlyActiveUsers", 5_000))));
+
+        GeminiService.GeminiResult result = gemini.getRecommendation("x");
+
+        assertThat(result.fromFallback()).isFalse();
+        assertThat(result.usage()).isEqualTo(UsageProfile.DEFAULT);
+    }
+
+    @Test
+    void absurdUsageEstimatesAreClamped() throws Exception {
+        server.respond(200, geminiResponse(Map.of("services", List.of("EC2"), "reasoning", "r", "mermaid", "m",
+                "usage", Map.of("monthlyActiveUsers", 0, "requestsPerMonth", 10,
+                        "storageGb", 99_999_999_999L, "dataTransferGb", 50))));
+
+        assertThat(gemini.getRecommendation("x").usage()).isEqualTo(new UsageProfile(1, 1_000, 10_000_000, 50));
     }
 
     @Test
@@ -117,6 +144,7 @@ class GeminiServiceTest {
         assertThat(result.fromFallback()).isTrue();
         assertThat(result.services()).containsExactly("EC2", "S3", "RDS", "CloudFront");
         assertThat(result.mermaid()).startsWith("graph TD");
+        assertThat(result.usage()).isEqualTo(UsageProfile.DEFAULT);
     }
 
     /** Wraps the model's JSON output the way the Gemini generateContent API does. */

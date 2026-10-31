@@ -1,6 +1,7 @@
 package com.cloudrec.service.pricing;
 
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
@@ -18,107 +19,157 @@ import static org.mockito.Mockito.when;
 @ExtendWith(MockitoExtension.class)
 class CostServiceTest {
 
+    /** ~1.16 peak req/s → 1 instance of everything; 1M requests; 10 thousand users. */
+    private static final UsageProfile SMALL = new UsageProfile(10_000, 1_000_000, 100, 200);
+    /** 155M req/month → ~179 peak req/s → 4 app instances, 1 DB, 1 cache node. */
+    private static final UsageProfile LARGE = new UsageProfile(500_000, 155_000_000, 2_000, 10_000);
+
     @Mock
     private AzurePricingClient azure;
     @Mock
     private GcpCsvPricing gcp;
 
     private final SimpleMeterRegistry meters = new SimpleMeterRegistry();
+    private CostService costs;
+
+    @BeforeEach
+    void setUp() {
+        costs = new CostService(azure, gcp, meters);
+        lenient().when(azure.supports(anyString())).thenReturn(false);
+        lenient().when(gcp.getUnitPrice(anyString())).thenReturn(Optional.empty());
+    }
 
     @Test
     void mapsServicesToEquivalentsOnEveryProvider() {
-        noLivePrices();
+        Map<String, Object> result = costs.process(List.of("EC2", "S3", "SQS"), SMALL);
 
-        Map<String, Object> result = new CostService(azure, gcp, meters).process(List.of("EC2", "S3", "DynamoDB"));
-
-        assertThat(result.get("aws")).isEqualTo(List.of("EC2", "S3", "DynamoDB"));
-        assertThat(result.get("azure")).isEqualTo(List.of("Virtual Machines", "Blob Storage", "Cosmos DB"));
-        assertThat(result.get("gcp")).isEqualTo(List.of("Compute Engine", "Cloud Storage", "Firestore"));
+        assertThat(result.get("aws")).isEqualTo(List.of("EC2", "S3", "SQS"));
+        assertThat(result.get("azure")).isEqualTo(List.of("Virtual Machines", "Blob Storage", "Service Bus"));
+        assertThat(result.get("gcp")).isEqualTo(List.of("Compute Engine", "Cloud Storage", "Pub/Sub"));
     }
 
     @Test
-    void usesBaselinesWhenNoLivePricing() {
-        noLivePrices();
+    void pricesEachServiceFromUsage() {
+        Map<String, Object> result = costs.process(List.of("EC2", "S3", "CloudFront"), SMALL);
 
-        Map<String, Object> result = new CostService(azure, gcp, meters).process(List.of("EC2", "RDS"));
+        // EC2: 1 instance × 30.37; S3: 100 GB × 0.023; CloudFront: 200 GB × 0.085
+        assertThat(items(result, "aws")).extracting(i -> i.get("monthlyCost")).containsExactly(30.37, 2.3, 17.0);
+        assertThat(cost(result)).containsEntry("aws", 49.67);
 
-        assertThat(cost(result)).containsEntry("aws", 23.0).containsEntry("azure", 25.0).containsEntry("gcp", 21.0);
+        Map<String, Object> s3 = items(result, "aws").get(1);
+        assertThat(s3).containsEntry("service", "S3").containsEntry("quantity", 100.0)
+                .containsEntry("unit", "GB").containsEntry("unitPrice", 0.023)
+                .containsEntry("source", CostService.ESTIMATE);
+    }
+
+    @Test
+    void costGrowsWithScale() {
+        List<String> stack = List.of("EC2", "RDS", "ElastiCache", "S3", "CloudFront", "Cognito");
+
+        Map<String, Object> small = costs.process(stack, SMALL);
+        Map<String, Object> large = costs.process(stack, LARGE);
+
+        Map<String, Object> ec2 = items(large, "aws").get(0);
+        assertThat(ec2).containsEntry("quantity", 4.0).containsEntry("monthlyCost", 121.48);
+        assertThat(items(large, "aws").get(1)).containsEntry("quantity", 1.0); // DB still fits on one instance
+        assertThat(cost(large).get("aws")).isGreaterThan(cost(small).get("aws") * 10);
+    }
+
+    @Test
+    void fixedMonthlyFeeIsAdded() {
+        Map<String, Object> result = costs.process(List.of("SQS"), SMALL);
+
+        // Service Bus: 9.81 base + 1M × 0.80
+        assertThat(items(result, "azure").get(0)).containsEntry("monthlyCost", 10.61);
+    }
+
+    @Test
+    void reportsUsageAndPeakLoad() {
+        Map<String, Object> result = costs.process(List.of("EC2"), LARGE);
+
+        @SuppressWarnings("unchecked")
+        Map<String, Object> usage = (Map<String, Object>) result.get("usage");
+        assertThat(usage).containsEntry("monthlyActiveUsers", 500_000L)
+                .containsEntry("requestsPerMonth", 155_000_000L)
+                .containsEntry("peakRequestsPerSecond", 179.4);
+    }
+
+    @Test
+    void picksCheapestProvider() {
+        Map<String, Object> result = costs.process(List.of("EC2", "RDS"), SMALL);
+
+        // AWS 30.37 + 15.00, Azure 30.37 + 14.72, GCP 24.46 + 9.37
+        assertThat(cost(result)).containsEntry("aws", 45.37).containsEntry("azure", 45.09).containsEntry("gcp", 33.83);
         assertThat(result.get("best")).isEqualTo("GCP");
-        assertThat(sources(result)).containsEntry("aws", "static baseline")
-                .containsEntry("azure", "static baseline")
-                .containsEntry("gcp", "static baseline");
+        assertThat(sources(result)).containsEntry("aws", CostService.ESTIMATE)
+                .containsEntry("azure", CostService.ESTIMATE)
+                .containsEntry("gcp", CostService.ESTIMATE);
     }
 
     @Test
-    void prefersLiveAzureAndCsvGcpPricesAndReportsSource() {
-        when(azure.getMonthlyPrice("Virtual Machines")).thenReturn(Optional.of(1.25));
-        when(azure.getMonthlyPrice("SQL Database")).thenReturn(Optional.empty());
-        when(gcp.getMonthlyPrice("Compute Engine")).thenReturn(Optional.of(30.0));
-        when(gcp.getMonthlyPrice("Cloud SQL")).thenReturn(Optional.empty());
+    void usesLiveAzureAndCsvGcpUnitPricesAndReportsSource() {
+        when(azure.supports("Virtual Machines")).thenReturn(true);
+        when(azure.getUnitPrice("Virtual Machines")).thenReturn(Optional.of(20.0));
+        when(gcp.getUnitPrice("Compute Engine")).thenReturn(Optional.of(50.0));
 
-        Map<String, Object> result = new CostService(azure, gcp, meters).process(List.of("EC2", "RDS"));
+        Map<String, Object> result = costs.process(List.of("EC2"), LARGE);
 
-        // Azure: 1.25 live + 16.0 baseline; GCP: 30.0 csv + 14.0 baseline
-        assertThat(cost(result)).containsEntry("azure", 17.25).containsEntry("gcp", 44.0);
-        assertThat(result.get("best")).isEqualTo("Azure");
+        // 4 instances at the live/CSV unit price
+        assertThat(cost(result)).containsEntry("azure", 80.0).containsEntry("gcp", 200.0);
+        assertThat(items(result, "azure").get(0)).containsEntry("source", "live");
+        assertThat(items(result, "gcp").get(0)).containsEntry("source", "csv");
         assertThat(sources(result)).containsEntry("azure", "live (Azure Retail Prices API)")
                 .containsEntry("gcp", "csv export");
     }
 
     @Test
-    void countsAzureFallbacksPerService() {
-        when(azure.getMonthlyPrice("Virtual Machines")).thenReturn(Optional.of(30.0));
-        when(azure.getMonthlyPrice("SQL Database")).thenReturn(Optional.empty());
-        lenient().when(gcp.getMonthlyPrice(anyString())).thenReturn(Optional.empty());
+    void countsAzureFallbacksOnlyForServicesWithALiveLookup() {
+        when(azure.supports("Virtual Machines")).thenReturn(true);
+        when(azure.getUnitPrice("Virtual Machines")).thenReturn(Optional.empty());
 
-        new CostService(azure, gcp, meters).process(List.of("EC2", "RDS"));
+        costs.process(List.of("EC2", "Lambda"), SMALL);
 
-        assertThat(meters.get("pricing.azure.fallbacks").tag("service", "SQL Database").counter().count()).isEqualTo(1.0);
-        assertThat(meters.find("pricing.azure.fallbacks").tag("service", "Virtual Machines").counter()).isNull();
+        assertThat(meters.get("pricing.azure.fallbacks").tag("service", "Virtual Machines").counter().count()).isEqualTo(1.0);
+        assertThat(meters.find("pricing.azure.fallbacks").tag("service", "Functions").counter()).isNull();
     }
 
     @Test
     void awsWinsTies() {
-        when(azure.getMonthlyPrice(anyString())).thenReturn(Optional.of(8.0));
-        when(gcp.getMonthlyPrice(anyString())).thenReturn(Optional.of(8.0));
+        when(gcp.getUnitPrice("Compute Engine")).thenReturn(Optional.of(30.37));
 
-        assertThat(new CostService(azure, gcp, meters).process(List.of("EC2")).get("best")).isEqualTo("AWS");
-    }
-
-    @Test
-    void roundsTotalsToCents() {
-        when(azure.getMonthlyPrice(anyString())).thenReturn(Optional.of(1.0 / 3));
-        lenient().when(gcp.getMonthlyPrice(anyString())).thenReturn(Optional.empty());
-
-        Map<String, Object> result = new CostService(azure, gcp, meters).process(List.of("EC2", "S3"));
-
-        assertThat(cost(result).get("azure")).isEqualTo(0.67);
+        assertThat(costs.process(List.of("EC2"), SMALL).get("best")).isEqualTo("AWS");
     }
 
     @Test
     void unknownServicesAreIgnored() {
-        noLivePrices();
-
-        Map<String, Object> result = new CostService(azure, gcp, meters).process(List.of("EC2", "Kinesis"));
+        Map<String, Object> result = costs.process(List.of("EC2", "Kinesis"), SMALL);
 
         assertThat(result.get("azure")).isEqualTo(List.of("Virtual Machines"));
-        assertThat(cost(result)).containsEntry("aws", 8.0);
+        assertThat(items(result, "aws")).hasSize(1);
     }
 
     @Test
     void catalogIsConsistent() {
+        assertThat(ServiceCatalog.SERVICE_MAPPING.keySet())
+                .containsExactlyInAnyOrderElementsOf(ServiceCatalog.SUPPORTED_AWS_SERVICES);
         for (String aws : ServiceCatalog.SUPPORTED_AWS_SERVICES) {
             Map<String, String> mapping = ServiceCatalog.SERVICE_MAPPING.get(aws);
-            assertThat(mapping).as("mapping for %s", aws).isNotNull();
-            assertThat(ServiceCatalog.AWS_BASELINE).containsKey(aws);
-            assertThat(ServiceCatalog.AZURE_BASELINE).containsKey(mapping.get("azure"));
-            assertThat(ServiceCatalog.GCP_BASELINE).containsKey(mapping.get("gcp"));
+            PriceRule awsRule = ServiceCatalog.AWS_PRICES.get(aws);
+            PriceRule azureRule = ServiceCatalog.AZURE_PRICES.get(mapping.get("azure"));
+            PriceRule gcpRule = ServiceCatalog.GCP_PRICES.get(mapping.get("gcp"));
+
+            assertThat(awsRule).as("AWS price for %s", aws).isNotNull();
+            assertThat(azureRule).as("Azure price for %s", aws).isNotNull();
+            assertThat(gcpRule).as("GCP price for %s", aws).isNotNull();
+            // Equivalent services must be billed by the same driver to be comparable
+            assertThat(azureRule.driver()).as("Azure driver for %s", aws).isEqualTo(awsRule.driver());
+            assertThat(gcpRule.driver()).as("GCP driver for %s", aws).isEqualTo(awsRule.driver());
         }
     }
 
-    private void noLivePrices() {
-        lenient().when(azure.getMonthlyPrice(anyString())).thenReturn(Optional.empty());
-        lenient().when(gcp.getMonthlyPrice(anyString())).thenReturn(Optional.empty());
+    @SuppressWarnings("unchecked")
+    private List<Map<String, Object>> items(Map<String, Object> result, String provider) {
+        return ((Map<String, List<Map<String, Object>>>) result.get("breakdown")).get(provider);
     }
 
     @SuppressWarnings("unchecked")

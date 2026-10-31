@@ -25,9 +25,11 @@ import java.util.concurrent.ConcurrentHashMap;
  * Live prices from the Azure Retail Prices API (public, no key required).
  * https://learn.microsoft.com/en-us/rest/api/cost-management/retail-prices/azure-retail-prices
  *
- * Strategy: one representative SKU per service, converted to an estimated
- * USD/month figure using a fixed usage profile (730 h compute, 100 GB storage).
- * Results are cached for 24 h; any failure falls back to the static baseline.
+ * Strategy: one representative meter per service, converted to a unit price
+ * that matches the service's {@link Driver} in {@link ServiceCatalog}
+ * (USD per instance-month, or per GB). Only services whose Azure meter maps
+ * cleanly onto that unit are looked up live. Results are cached for 24 h; any
+ * failure falls back to the catalog's list-price estimate.
  */
 @Component
 public class AzurePricingClient {
@@ -35,7 +37,6 @@ public class AzurePricingClient {
     private static final Logger log = LoggerFactory.getLogger(AzurePricingClient.class);
 
     private static final long CACHE_TTL_MS = 24 * 60 * 60 * 1000L;
-    private static final double STORAGE_GB = 100.0;
     private static final double HOURS_PER_MONTH = 730.0;
 
     private final ObjectMapper mapper = new ObjectMapper();
@@ -65,34 +66,33 @@ public class AzurePricingClient {
                 "serviceName eq 'Storage' and meterName eq 'Hot LRS Data Stored' and priceType eq 'Consumption'",
                 "SQL Database",
                 "serviceName eq 'SQL Database' and skuName eq 'S0' and priceType eq 'Consumption'",
-                "Functions",
-                "serviceName eq 'Functions' and meterName eq 'Standard vCPU Duration' and priceType eq 'Consumption'",
-                "Cosmos DB",
-                "serviceName eq 'Azure Cosmos DB' and meterName eq '100 RU/s' and priceType eq 'Consumption'",
                 "CDN",
-                "serviceName eq 'Content Delivery Network' and meterName eq 'Standard Data Transfer' and priceType eq 'Consumption'",
-                "API Management",
-                "serviceName eq 'API Management' and skuName eq 'Developer' and priceType eq 'Consumption'"
+                "serviceName eq 'Content Delivery Network' and meterName eq 'Standard Data Transfer' and priceType eq 'Consumption'"
         );
     }
 
-    private record CachedPrice(double monthlyUsd, long fetchedAt) {}
+    private record CachedPrice(double unitPrice, long fetchedAt) {}
 
     /** Warm the cache in the background at startup so first user request is fast. */
     @EventListener(ContextRefreshedEvent.class)
     public void warmCache() {
         if (!warmCacheOnStartup) return;
-        CompletableFuture.runAsync(() -> filters.keySet().forEach(this::getMonthlyPrice));
+        CompletableFuture.runAsync(() -> filters.keySet().forEach(this::getUnitPrice));
     }
 
-    /** Estimated USD/month for the given Azure service, empty if live price unavailable. */
-    public Optional<Double> getMonthlyPrice(String azureService) {
+    /** Whether this service has a live price lookup at all. */
+    public boolean supports(String azureService) {
+        return filters.containsKey(azureService);
+    }
+
+    /** USD per unit (instance-month or GB) for the given Azure service, empty if no live price. */
+    public Optional<Double> getUnitPrice(String azureService) {
         String filter = filters.get(azureService);
         if (filter == null) return Optional.empty();
 
         CachedPrice cached = cache.get(azureService);
         if (cached != null && System.currentTimeMillis() - cached.fetchedAt() < CACHE_TTL_MS) {
-            return Optional.of(cached.monthlyUsd());
+            return Optional.of(cached.unitPrice());
         }
 
         try {
@@ -117,9 +117,9 @@ public class AzurePricingClient {
                 double price = item.path("retailPrice").asDouble(0);
                 if (price <= 0) continue;
 
-                Double monthly = toMonthly(price, item.path("unitOfMeasure").asText(""));
-                if (monthly != null) {
-                    double rounded = Math.round(monthly * 100.0) / 100.0;
+                Double unitPrice = toUnitPrice(price, item.path("unitOfMeasure").asText(""));
+                if (unitPrice != null) {
+                    double rounded = Math.round(unitPrice * 10_000.0) / 10_000.0;
                     cache.put(azureService, new CachedPrice(rounded, System.currentTimeMillis()));
                     return Optional.of(rounded);
                 }
@@ -130,14 +130,13 @@ public class AzurePricingClient {
         return Optional.empty();
     }
 
-    /** Convert a retail price to estimated USD/month based on its unit of measure. */
-    static Double toMonthly(double price, String unit) {
+    /** Convert a retail price to USD per instance-month or per GB, based on its unit of measure. */
+    static Double toUnitPrice(double price, String unit) {
         String u = unit.toLowerCase();
         if (u.contains("hour")) return price * HOURS_PER_MONTH;
         if (u.contains("/day") || u.contains("1 day")) return price * 30;
-        if (u.contains("gb/month")) return price * STORAGE_GB;
         if (u.contains("/month")) return price;
-        if (u.contains("gb")) return price * STORAGE_GB;
+        if (u.contains("gb")) return price;
         return null;
     }
 }

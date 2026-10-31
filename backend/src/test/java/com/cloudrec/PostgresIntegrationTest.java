@@ -4,6 +4,7 @@ import com.cloudrec.entity.User;
 import com.cloudrec.repository.RecommendationHistoryRepository;
 import com.cloudrec.repository.UserRepository;
 import com.cloudrec.service.GeminiService;
+import com.cloudrec.service.pricing.UsageProfile;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -55,7 +56,8 @@ class PostgresIntegrationTest {
     @Test
     void fullUserJourney() throws Exception {
         when(gemini.getRecommendation(anyString())).thenReturn(new GeminiService.GeminiResult(
-                List.of("EC2", "RDS"), "Classic two-tier app.", "graph TD; User-->EC2; EC2-->RDS;", false));
+                List.of("EC2", "RDS"), "Classic two-tier app.", "graph TD; User-->EC2; EC2-->RDS;",
+                UsageProfile.DEFAULT, false));
 
         mvc.perform(post("/auth/register").contentType(MediaType.APPLICATION_JSON)
                         .content("{\"email\":\"pg@example.com\",\"password\":\"secret123\"}"))
@@ -72,7 +74,7 @@ class PostgresIntegrationTest {
                         .content("{\"problem\":\"an online bookstore\"}"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.aws[0]").value("EC2"))
-                .andExpect(jsonPath("$.cost.aws").value(23.0));
+                .andExpect(jsonPath("$.cost.aws").value(45.37));
 
         mvc.perform(get("/api/history").header("Authorization", "Bearer " + token))
                 .andExpect(status().isOk())

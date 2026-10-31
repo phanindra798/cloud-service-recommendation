@@ -5,21 +5,29 @@ import org.springframework.stereotype.Service;
 
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
+import java.util.function.Function;
 
 /**
- * Maps recommended AWS services to Azure/GCP equivalents and computes an
- * estimated monthly cost per provider.
+ * Maps recommended AWS services to Azure/GCP equivalents and estimates the
+ * monthly cost of each one from the usage profile:
  *
- * Pricing sources:
- *  - AWS:   static baseline (AWS Price List Query API requires SigV4-signed
+ *   cost = fixedMonthly + unitPrice × quantity(usage)
+ *
+ * Unit price sources:
+ *  - AWS:   list-price estimate (AWS Price List Query API requires SigV4-signed
  *           requests, i.e. AWS credentials — plug point in place)
- *  - Azure: live Azure Retail Prices API (public), cached 24 h, baseline fallback
- *  - GCP:   local CSV export when provided, otherwise static baseline
+ *  - Azure: live Azure Retail Prices API where a matching meter exists,
+ *           cached 24 h, otherwise list-price estimate
+ *  - GCP:   local CSV export when provided, otherwise list-price estimate
  */
 @Service
 public class CostService {
+
+    static final String ESTIMATE = "list-price estimate";
 
     private final AzurePricingClient azurePricing;
     private final GcpCsvPricing gcpPricing;
@@ -31,11 +39,10 @@ public class CostService {
         this.meters = meters;
     }
 
-    public Map<String, Object> process(List<String> awsServices) {
+    public Map<String, Object> process(List<String> awsServices, UsageProfile usage) {
 
         List<String> azure = new ArrayList<>();
         List<String> gcp = new ArrayList<>();
-
         for (String service : awsServices) {
             Map<String, String> mapping = ServiceCatalog.SERVICE_MAPPING.get(service);
             if (mapping != null) {
@@ -44,27 +51,16 @@ public class CostService {
             }
         }
 
-        boolean[] azureLiveUsed = {false};
-        boolean[] gcpCsvUsed = {false};
+        List<Map<String, Object>> awsItems = price(awsServices, ServiceCatalog.AWS_PRICES, usage,
+                s -> Optional.empty(), null);
+        List<Map<String, Object>> azureItems = price(azure, ServiceCatalog.AZURE_PRICES, usage,
+                this::liveAzurePrice, "live");
+        List<Map<String, Object>> gcpItems = price(gcp, ServiceCatalog.GCP_PRICES, usage,
+                gcpPricing::getUnitPrice, "csv");
 
-        double awsTotal = round(awsServices.stream()
-                .mapToDouble(s -> ServiceCatalog.AWS_BASELINE.getOrDefault(s, 0.0))
-                .sum());
-
-        double azureTotal = round(azure.stream()
-                .mapToDouble(s -> azurePricing.getMonthlyPrice(s)
-                        .map(p -> { azureLiveUsed[0] = true; return p; })
-                        .orElseGet(() -> {
-                            meters.counter("pricing.azure.fallbacks", "service", s).increment();
-                            return ServiceCatalog.AZURE_BASELINE.getOrDefault(s, 0.0);
-                        }))
-                .sum());
-
-        double gcpTotal = round(gcp.stream()
-                .mapToDouble(s -> gcpPricing.getMonthlyPrice(s)
-                        .map(p -> { gcpCsvUsed[0] = true; return p; })
-                        .orElse(ServiceCatalog.GCP_BASELINE.getOrDefault(s, 0.0)))
-                .sum());
+        double awsTotal = total(awsItems);
+        double azureTotal = total(azureItems);
+        double gcpTotal = total(gcpItems);
 
         String best = "AWS";
         double min = awsTotal;
@@ -76,16 +72,60 @@ public class CostService {
         result.put("azure", azure);
         result.put("gcp", gcp);
         result.put("cost", Map.of("aws", awsTotal, "azure", azureTotal, "gcp", gcpTotal));
+        result.put("breakdown", Map.of("aws", awsItems, "azure", azureItems, "gcp", gcpItems));
+        result.put("usage", usage.toMap());
         result.put("best", best);
         result.put("pricingSource", Map.of(
-                "aws", "static baseline",
-                "azure", azureLiveUsed[0] ? "live (Azure Retail Prices API)" : "static baseline",
-                "gcp", gcpCsvUsed[0] ? "csv export" : "static baseline"
+                "aws", ESTIMATE,
+                "azure", anySource(azureItems, "live") ? "live (Azure Retail Prices API)" : ESTIMATE,
+                "gcp", anySource(gcpItems, "csv") ? "csv export" : ESTIMATE
         ));
         return result;
     }
 
-    private double round(double v) {
+    private Optional<Double> liveAzurePrice(String service) {
+        if (!azurePricing.supports(service)) return Optional.empty();
+        Optional<Double> price = azurePricing.getUnitPrice(service);
+        if (price.isEmpty()) {
+            meters.counter("pricing.azure.fallbacks", "service", service).increment();
+        }
+        return price;
+    }
+
+    /** One line item per known service; unknown services are skipped. */
+    private List<Map<String, Object>> price(List<String> services, Map<String, PriceRule> catalog,
+                                            UsageProfile usage, Function<String, Optional<Double>> live,
+                                            String liveSource) {
+        List<Map<String, Object>> items = new ArrayList<>();
+        for (String service : services) {
+            PriceRule rule = catalog.get(service);
+            if (rule == null) continue;
+
+            Optional<Double> livePrice = live.apply(service);
+            double unitPrice = livePrice.orElse(rule.unitPrice());
+            double quantity = rule.driver().quantity(usage);
+
+            Map<String, Object> item = new LinkedHashMap<>();
+            item.put("service", service);
+            item.put("quantity", round(quantity));
+            item.put("unit", rule.driver().unit());
+            item.put("unitPrice", unitPrice);
+            item.put("monthlyCost", round(rule.fixedMonthly() + unitPrice * quantity));
+            item.put("source", livePrice.isPresent() ? liveSource : ESTIMATE);
+            items.add(item);
+        }
+        return items;
+    }
+
+    private static double total(List<Map<String, Object>> items) {
+        return round(items.stream().mapToDouble(i -> (double) i.get("monthlyCost")).sum());
+    }
+
+    private static boolean anySource(List<Map<String, Object>> items, String source) {
+        return items.stream().anyMatch(i -> source.equals(i.get("source")));
+    }
+
+    private static double round(double v) {
         return Math.round(v * 100.0) / 100.0;
     }
 }

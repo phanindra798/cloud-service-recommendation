@@ -3,6 +3,7 @@ package com.cloudrec.controller;
 import com.cloudrec.repository.RecommendationHistoryRepository;
 import com.cloudrec.service.GeminiService;
 import com.cloudrec.service.JwtService;
+import com.cloudrec.service.pricing.UsageProfile;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -49,6 +50,7 @@ class RecommendationControllerTest {
                 List.of("Lambda", "DynamoDB"),
                 "Serverless fits spiky traffic.",
                 "graph TD; User-->Lambda; Lambda-->DynamoDB;",
+                new UsageProfile(10_000, 2_000_000, 50, 100),
                 false));
     }
 
@@ -78,9 +80,13 @@ class RecommendationControllerTest {
                 .andExpect(jsonPath("$.aws[0]").value("Lambda"))
                 .andExpect(jsonPath("$.azure[1]").value("Cosmos DB"))
                 .andExpect(jsonPath("$.gcp[1]").value("Firestore"))
-                .andExpect(jsonPath("$.cost.aws").value(7.0))
+                .andExpect(jsonPath("$.cost.aws").value(3.06)) // 2M req × (1.03 Lambda + 0.50 DynamoDB)
+                .andExpect(jsonPath("$.breakdown.aws[0].service").value("Lambda"))
+                .andExpect(jsonPath("$.breakdown.aws[0].quantity").value(2.0))
+                .andExpect(jsonPath("$.breakdown.aws[0].monthlyCost").value(2.06))
+                .andExpect(jsonPath("$.usage.monthlyActiveUsers").value(10_000))
                 .andExpect(jsonPath("$.best").isNotEmpty())
-                .andExpect(jsonPath("$.pricingSource.aws").value("static baseline"))
+                .andExpect(jsonPath("$.pricingSource.aws").value("list-price estimate"))
                 .andExpect(jsonPath("$.reasoning").value("Serverless fits spiky traffic."))
                 .andExpect(jsonPath("$.mermaid").value("graph TD; User-->Lambda; Lambda-->DynamoDB;"))
                 .andExpect(jsonPath("$.aiGenerated").value(true));

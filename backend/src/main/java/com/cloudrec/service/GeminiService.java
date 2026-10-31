@@ -1,6 +1,7 @@
 package com.cloudrec.service;
 
 import com.cloudrec.service.pricing.ServiceCatalog;
+import com.cloudrec.service.pricing.UsageProfile;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
@@ -29,6 +30,9 @@ public class GeminiService {
 
     private static final Logger log = LoggerFactory.getLogger(GeminiService.class);
 
+    private static final List<String> USAGE_FIELDS =
+            List.of("monthlyActiveUsers", "requestsPerMonth", "storageGb", "dataTransferGb");
+
     private final String apiKey;
     private final String apiUrl;
     private final MeterRegistry meters;
@@ -47,7 +51,8 @@ public class GeminiService {
         this.meters = meters;
     }
 
-    public record GeminiResult(List<String> services, String reasoning, String mermaid, boolean fromFallback) {}
+    public record GeminiResult(List<String> services, String reasoning, String mermaid,
+                               UsageProfile usage, boolean fromFallback) {}
 
     public GeminiResult getRecommendation(String input) {
         try {
@@ -60,6 +65,10 @@ public class GeminiService {
                     Rules:
                     - Pick only from this list: %s
                     - "reasoning": 3-6 sentences explaining WHY each chosen service fits the requirement.
+                    - "usage": your best estimate of the app's monthly usage, used to size and price it.
+                      Use numbers the user gives; otherwise infer realistic values from the description.
+                      monthlyActiveUsers, requestsPerMonth (API/page requests), storageGb (data at rest),
+                      dataTransferGb (data served to users per month).
                     - "mermaid": a valid Mermaid flowchart (graph TD) showing how the chosen services connect
                       for this architecture. Node labels must contain only letters, numbers and spaces.
                       Example format: graph TD; User-->CloudFront; CloudFront-->EC2; EC2-->RDS;
@@ -84,7 +93,15 @@ public class GeminiService {
             supported.forEach(enumValues::add);
             props.putObject("reasoning").put("type", "STRING");
             props.putObject("mermaid").put("type", "STRING");
-            schema.putArray("required").add("services").add("reasoning").add("mermaid");
+            ObjectNode usage = props.putObject("usage");
+            usage.put("type", "OBJECT");
+            ObjectNode usageProps = usage.putObject("properties");
+            ArrayNode usageRequired = usage.putArray("required");
+            for (String field : USAGE_FIELDS) {
+                usageProps.putObject(field).put("type", "INTEGER");
+                usageRequired.add(field);
+            }
+            schema.putArray("required").add("services").add("reasoning").add("mermaid").add("usage");
 
             HttpRequest request = HttpRequest.newBuilder()
                     .uri(URI.create(apiUrl))
@@ -124,6 +141,7 @@ public class GeminiService {
                     services,
                     result.path("reasoning").asText(""),
                     result.path("mermaid").asText(""),
+                    parseUsage(result.path("usage")),
                     false
             );
 
@@ -131,6 +149,19 @@ public class GeminiService {
             log.warn("Gemini call failed, using fallback: {}", e.toString());
             return fallback("exception");
         }
+    }
+
+    /** Falls back to the default profile if the estimate is missing or incomplete. */
+    static UsageProfile parseUsage(JsonNode usage) {
+        for (String field : USAGE_FIELDS) {
+            if (!usage.path(field).isNumber()) return UsageProfile.DEFAULT;
+        }
+        return new UsageProfile(
+                usage.path("monthlyActiveUsers").asLong(),
+                usage.path("requestsPerMonth").asLong(),
+                usage.path("storageGb").asLong(),
+                usage.path("dataTransferGb").asLong()
+        ).clamped();
     }
 
     private static String abbreviate(String s) {
@@ -145,6 +176,7 @@ public class GeminiService {
                         + "architecture: EC2 for compute, S3 for object storage, RDS for the "
                         + "relational database and CloudFront as the CDN.",
                 "graph TD; User-->CloudFront; CloudFront-->EC2; EC2-->RDS; EC2-->S3;",
+                UsageProfile.DEFAULT,
                 true
         );
     }

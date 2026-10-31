@@ -22,9 +22,9 @@ class GcpCsvPricingTest {
                 """));
 
         assertThat(pricing.isLoaded()).isTrue();
-        assertThat(pricing.getMonthlyPrice("Compute Engine")).contains(6.85);
-        assertThat(pricing.getMonthlyPrice("Cloud Storage")).contains(2.30);
-        assertThat(pricing.getMonthlyPrice("Cloud SQL")).isEmpty();
+        assertThat(pricing.getUnitPrice("Compute Engine")).contains(6.85);
+        assertThat(pricing.getUnitPrice("Cloud Storage")).contains(2.30);
+        assertThat(pricing.getUnitPrice("Cloud SQL")).isEmpty();
     }
 
     @Test
@@ -33,7 +33,7 @@ class GcpCsvPricingTest {
         pricing.load(new ClassPathResource("pricing/does-not-exist.csv"));
 
         assertThat(pricing.isLoaded()).isFalse();
-        assertThat(pricing.getMonthlyPrice("Compute Engine")).isEmpty();
+        assertThat(pricing.getUnitPrice("Compute Engine")).isEmpty();
     }
 
     private ByteArrayResource csv(String content) {
