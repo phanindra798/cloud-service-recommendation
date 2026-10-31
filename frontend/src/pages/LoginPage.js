@@ -1,7 +1,7 @@
 import { useState, useEffect } from "react";
 import { useNavigate, Link } from "react-router-dom";
-import { getAuth } from "../lib/auth";
-import { API_BASE } from "../lib/api";
+import { getAuth, setAuth } from "../lib/auth";
+import { apiFetch } from "../lib/api";
 
 export default function LoginPage() {
   const [email, setEmail]       = useState("");
@@ -21,7 +21,7 @@ export default function LoginPage() {
     if (!email.trim() || !password) { setError("Email and password are required."); return; }
     setLoading(true); setError(null);
     try {
-      const res = await fetch(`${API_BASE}/auth/login`, {
+      const res = await apiFetch("/auth/login", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ email: email.trim(), password }),
@@ -31,8 +31,7 @@ export default function LoginPage() {
         throw new Error(t || `Login failed (${res.status})`);
       }
       const data = await res.json();
-      localStorage.setItem("auth_email", data.email);
-      localStorage.setItem("auth_token", data.token);
+      setAuth(data.email);
       navigate("/", { replace: true });
     } catch (err) {
       setError(

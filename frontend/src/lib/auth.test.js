@@ -1,23 +1,16 @@
-import { getAuth, authHeader, clearAuth } from "./auth";
+import { getAuth, setAuth, clearAuth } from "./auth";
 
-test("getAuth is null until both email and token are stored", () => {
+test("only the email is kept in the browser, never the token", () => {
   expect(getAuth()).toBeNull();
-  localStorage.setItem("auth_email", "alice@example.com");
-  expect(getAuth()).toBeNull();
-  localStorage.setItem("auth_token", "abc");
-  expect(getAuth()).toEqual({ email: "alice@example.com", token: "abc" });
+  setAuth("alice@example.com");
+  expect(getAuth()).toEqual({ email: "alice@example.com" });
+  expect(Object.keys(localStorage)).toEqual(["auth_email"]);
 });
 
-test("authHeader builds a Bearer header only when signed in", () => {
-  expect(authHeader()).toEqual({});
-  localStorage.setItem("auth_email", "alice@example.com");
-  localStorage.setItem("auth_token", "abc");
-  expect(authHeader()).toEqual({ Authorization: "Bearer abc" });
-});
-
-test("clearAuth signs the user out", () => {
-  localStorage.setItem("auth_email", "alice@example.com");
-  localStorage.setItem("auth_token", "abc");
+test("clearAuth signs the user out and removes tokens left by older versions", () => {
+  setAuth("alice@example.com");
+  localStorage.setItem("auth_token", "old-token");
   clearAuth();
   expect(getAuth()).toBeNull();
+  expect(localStorage.getItem("auth_token")).toBeNull();
 });

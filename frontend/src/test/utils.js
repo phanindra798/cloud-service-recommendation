@@ -37,9 +37,9 @@ export function textResponse(text, status) {
   };
 }
 
-export function signIn(email = "alice@example.com", token = "test-token") {
+// The real session is an httpOnly cookie the browser handles; the UI only keeps the email.
+export function signIn(email = "alice@example.com") {
   localStorage.setItem("auth_email", email);
-  localStorage.setItem("auth_token", token);
 }
 
 export const SAMPLE_RESULT = {

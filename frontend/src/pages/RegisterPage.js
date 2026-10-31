@@ -1,7 +1,7 @@
 import { useState, useEffect } from "react";
 import { useNavigate, Link } from "react-router-dom";
 import { getAuth } from "../lib/auth";
-import { API_BASE } from "../lib/api";
+import { apiFetch } from "../lib/api";
 
 export default function RegisterPage() {
   const [email, setEmail]       = useState("");
@@ -34,7 +34,7 @@ export default function RegisterPage() {
     if (password !== confirm) { setError("Passwords do not match."); return; }
     setLoading(true); setError(null);
     try {
-      const res = await fetch(`${API_BASE}/auth/register`, {
+      const res = await apiFetch("/auth/register", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ email: email.trim(), password }),

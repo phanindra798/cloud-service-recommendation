@@ -4,9 +4,15 @@ import com.cloudrec.service.AuthService;
 import com.cloudrec.service.JwtService;
 import com.cloudrec.service.LoginAttemptService;
 import jakarta.servlet.http.HttpServletRequest;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.ResponseCookie;
+import org.springframework.security.authentication.AnonymousAuthenticationToken;
+import org.springframework.security.core.Authentication;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
+import java.time.Duration;
 import java.util.Map;
 
 @RestController
@@ -15,12 +21,18 @@ public class AuthController {
 
     private final AuthService service;
     private final JwtService jwtService;
-    private final LoginAttemptService attempts;
+    /** httpOnly so page scripts (and any XSS) can't read the token. */
+    public static final String AUTH_COOKIE = "auth_token";
 
-    public AuthController(AuthService service, JwtService jwtService, LoginAttemptService attempts) {
+    private final LoginAttemptService attempts;
+    private final boolean secureCookie;
+
+    public AuthController(AuthService service, JwtService jwtService, LoginAttemptService attempts,
+                          @Value("${security.cookie.secure:true}") boolean secureCookie) {
         this.service = service;
         this.jwtService = jwtService;
         this.attempts = attempts;
+        this.secureCookie = secureCookie;
     }
 
     @PostMapping("/register")
@@ -70,12 +82,40 @@ public class AuthController {
             service.login(email, password);
             attempts.recordSuccess(email);
             String token = jwtService.generateToken(email);
-            return ResponseEntity.ok(Map.of("token", token, "email", email));
+            return ResponseEntity.ok()
+                    .header(HttpHeaders.SET_COOKIE, authCookie(token, Duration.ofMillis(jwtService.expirationMs())).toString())
+                    .body(Map.of("email", email));
 
         } catch (Exception e) {
             attempts.recordFailure(email);
             return ResponseEntity.status(401).body("Invalid email or password");
         }
+    }
+
+    /** Who the auth cookie belongs to; the SPA calls this on load since it can't read the cookie. */
+    @GetMapping("/me")
+    public ResponseEntity<?> me(Authentication auth) {
+        if (auth == null || !auth.isAuthenticated() || auth instanceof AnonymousAuthenticationToken) {
+            return ResponseEntity.status(401).body(Map.of("error", "Not signed in"));
+        }
+        return ResponseEntity.ok(Map.of("email", auth.getName()));
+    }
+
+    @PostMapping("/logout")
+    public ResponseEntity<?> logout() {
+        return ResponseEntity.noContent()
+                .header(HttpHeaders.SET_COOKIE, authCookie("", Duration.ZERO).toString())
+                .build();
+    }
+
+    private ResponseCookie authCookie(String value, Duration maxAge) {
+        return ResponseCookie.from(AUTH_COOKIE, value)
+                .httpOnly(true)
+                .secure(secureCookie)
+                .sameSite("Strict")
+                .path("/")
+                .maxAge(maxAge)
+                .build();
     }
 
     private static ResponseEntity<String> tooManyRequests(String message, long retryAfterSeconds) {

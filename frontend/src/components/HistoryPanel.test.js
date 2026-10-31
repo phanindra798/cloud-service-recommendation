@@ -8,7 +8,7 @@ const HISTORY = [
   { id: 1, problem: "x".repeat(100), resultJson: "{corrupt", createdAt: "2026-09-01T10:00:00Z" },
 ];
 
-beforeEach(() => signIn("alice@example.com", "jwt-123"));
+beforeEach(() => signIn("alice@example.com"));
 
 test("loads history only when opened", async () => {
   global.fetch = jest.fn().mockResolvedValue(jsonResponse(HISTORY));
@@ -19,7 +19,7 @@ test("loads history only when opened", async () => {
 
   expect(await screen.findByText("a chat app")).toBeInTheDocument();
   expect(screen.getByText("x".repeat(80) + "…")).toBeInTheDocument();
-  expect(global.fetch.mock.calls[0][1].headers.Authorization).toBe("Bearer jwt-123");
+  expect(global.fetch.mock.calls[0][1].credentials).toBe("include");
 });
 
 test("selecting an entry passes the parsed result back", async () => {

@@ -1,12 +1,14 @@
 import { useNavigate, Link } from "react-router-dom";
 import { getAuth, clearAuth } from "../lib/auth";
+import { apiFetch } from "../lib/api";
 
 // Shared page frame: header with logo/auth controls, footer, background layers.
 export default function AppShell({ children }) {
   const auth = getAuth();
   const navigate = useNavigate();
 
-  const handleLogout = () => {
+  const handleLogout = async () => {
+    try { await apiFetch("/auth/logout", { method: "POST" }); } catch { /* clear locally anyway */ }
     clearAuth();
     navigate("/login");
   };

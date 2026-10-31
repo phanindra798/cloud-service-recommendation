@@ -5,7 +5,8 @@ import HomePage from "./HomePage";
 import { renderAt, jsonResponse, signIn, SAMPLE_RESULT } from "../test/utils";
 
 beforeEach(() => {
-  signIn("alice@example.com", "jwt-123");
+  signIn("alice@example.com");
+  document.cookie = "XSRF-TOKEN=csrf-abc";
   mermaid.render.mockResolvedValue({ svg: "<svg></svg>" });
 });
 
@@ -20,11 +21,15 @@ function submit(problem) {
   userEvent.click(screen.getByRole("button", { name: /skip/i }));
 }
 
-function sentBody() {
-  return JSON.parse(global.fetch.mock.calls[0][1].body);
+function recommendCall() {
+  return global.fetch.mock.calls.find(([url]) => url.endsWith("/api/recommend"));
 }
 
-test("sends the problem with the JWT and renders the recommendation", async () => {
+function sentBody() {
+  return JSON.parse(recommendCall()[1].body);
+}
+
+test("sends the problem with the CSRF token and renders the recommendation", async () => {
   global.fetch = jest.fn().mockResolvedValue(jsonResponse(SAMPLE_RESULT));
   renderAt(<HomePage />);
 
@@ -33,9 +38,9 @@ test("sends the problem with the JWT and renders the recommendation", async () =
   expect(await screen.findByText("Serverless fits spiky traffic.")).toBeInTheDocument();
   expect(screen.getByText("2 services identified")).toBeInTheDocument();
 
-  const [url, options] = global.fetch.mock.calls[0];
-  expect(url).toMatch(/\/api\/recommend$/);
-  expect(options.headers.Authorization).toBe("Bearer jwt-123");
+  const [, options] = recommendCall();
+  expect(options.credentials).toBe("include");
+  expect(options.headers["X-XSRF-TOKEN"]).toBe("csrf-abc");
   expect(JSON.parse(options.body)).toEqual({ problem: "a serverless todo app" });
 });
 
@@ -49,7 +54,7 @@ test("asks follow-up questions before calling the API", () => {
   expect(screen.getByText(/how many monthly users/i)).toBeInTheDocument();
   expect(screen.getByText(/what kind of app/i)).toBeInTheDocument();
   expect(screen.getByText(/stay online if a server fails/i)).toBeInTheDocument();
-  expect(global.fetch).not.toHaveBeenCalled();
+  expect(recommendCall()).toBeUndefined();
 });
 
 test("sends the chosen answers with the problem", async () => {
@@ -128,6 +133,14 @@ test("editing the description closes the questions", () => {
   expect(screen.queryByText(/a few quick questions/i)).not.toBeInTheDocument();
 });
 
+test("an expired cookie on page load sends the user to sign in", async () => {
+  global.fetch = jest.fn().mockResolvedValue(jsonResponse({ error: "Not signed in" }, 401));
+  renderAt(<HomePage />);
+
+  await waitFor(() => expect(screen.getByTestId("location")).toHaveTextContent("/login"));
+  expect(localStorage.getItem("auth_email")).toBeNull();
+});
+
 test("submit is disabled until something is typed", () => {
   global.fetch = jest.fn();
   renderAt(<HomePage />);
@@ -160,5 +173,5 @@ test("an expired session signs the user out", async () => {
   submit("anything");
 
   await waitFor(() => expect(screen.getByTestId("location")).toHaveTextContent("/login"));
-  expect(localStorage.getItem("auth_token")).toBeNull();
+  expect(localStorage.getItem("auth_email")).toBeNull();
 });

@@ -9,15 +9,15 @@ function fillAndSubmit(email, password) {
   userEvent.click(screen.getByRole("button", { name: /sign in/i }));
 }
 
-test("successful login stores the token and goes home", async () => {
-  global.fetch = jest.fn().mockResolvedValue(jsonResponse({ email: "alice@example.com", token: "jwt-123" }));
+test("successful login remembers the email (not a token) and goes home", async () => {
+  global.fetch = jest.fn().mockResolvedValue(jsonResponse({ email: "alice@example.com" }));
   renderAt(<LoginPage />, { path: "/login", route: "/login" });
 
   fillAndSubmit("alice@example.com", "secret123");
 
   await waitFor(() => expect(screen.getByTestId("location")).toHaveTextContent(/^\/$/));
-  expect(localStorage.getItem("auth_token")).toBe("jwt-123");
   expect(localStorage.getItem("auth_email")).toBe("alice@example.com");
+  expect(localStorage.getItem("auth_token")).toBeNull();
 
   const [url, options] = global.fetch.mock.calls[0];
   expect(url).toMatch(/\/auth\/login$/);
@@ -31,7 +31,7 @@ test("shows the server's error on bad credentials", async () => {
   fillAndSubmit("alice@example.com", "wrong");
 
   expect(await screen.findByText("Invalid email or password")).toBeInTheDocument();
-  expect(localStorage.getItem("auth_token")).toBeNull();
+  expect(localStorage.getItem("auth_email")).toBeNull();
 });
 
 test("requires both fields before calling the API", () => {
