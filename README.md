@@ -32,8 +32,10 @@ those services fit, and a generated architecture diagram.
 - **11 services per cloud** — compute, containers, serverless, object
   storage, SQL, NoSQL, cache, CDN, API gateway, queue and user auth,
   mapped across AWS, Azure and GCP
-- **JWT authentication** — stateless Spring Security with BCrypt password
-  hashing and 24-hour token expiry
+- **Hardened authentication** — stateless JWT in an httpOnly, Secure,
+  SameSite=Strict cookie with CSRF protection, BCrypt passwords, account
+  lockout after repeated failures and per-IP rate limits on login/register
+  (see [Security](#security))
 - **Per-user history** — past recommendations stored in PostgreSQL and
   reloadable from the UI
 - **Rate limiting** — sliding window, 10 requests/minute per user, to
@@ -45,8 +47,8 @@ those services fit, and a generated architecture diagram.
   is and whether it must stay up, with tap-to-select chips. Questions the
   description already answers ("a chat app for 50k users in India") are
   skipped, and every question can be skipped
-- **Tested** — 93 backend tests (JUnit 5, Mockito, MockMvc, Testcontainers
-  PostgreSQL) with a JaCoCo coverage gate, and 45 frontend tests (Jest,
+- **Tested** — 112 backend tests (JUnit 5, Mockito, MockMvc, Testcontainers
+  PostgreSQL) with a JaCoCo coverage gate, and 47 frontend tests (Jest,
   React Testing Library), run on every push by GitHub Actions
 - **Graceful degradation** — if Gemini or a pricing API is down, the app
   still answers with clearly labelled baseline data instead of failing
@@ -248,8 +250,8 @@ cd backend
 
 JaCoCo writes a report to `backend/target/site/jacoco/`, and `mvn verify`
 fails if coverage drops below 85% of lines or 75% of branches. Current
-coverage without Docker (Testcontainers test skipped): **96.4% lines,
-88.8% branches**.
+coverage without Docker (Testcontainers test skipped): **96.6% lines,
+88.1% branches**.
 
 ### Frontend
 
@@ -269,6 +271,22 @@ result view, the Mermaid diagram fallback and the history panel.
 `.github/workflows/ci.yml` runs both suites, the production frontend build,
 and uploads both coverage reports on every push to `main` and every pull
 request.
+
+## Security
+
+| Threat | Protection |
+|--------|------------|
+| Token theft via XSS | JWT lives in an `HttpOnly` cookie page scripts can't read; the browser only keeps the email for display |
+| Token sent over plain HTTP / to other sites | Cookie is `Secure` and `SameSite=Strict` |
+| Cross-site request forgery | Cookie-authenticated writes need a CSRF token (Spring Security SPA mode: `XSRF-TOKEN` cookie echoed in `X-XSRF-TOKEN`) |
+| Password guessing | 5 failed logins lock an email for 15 minutes (unknown emails too, so a lock reveals nothing); 20 login/register requests per minute per IP; `429` with `Retry-After` |
+| Account discovery via timing | Unknown emails still run a bcrypt check, so response time is the same |
+| Weak or leaked signing key | No default `JWT_SECRET`: the app refuses to start without 32+ bytes |
+| Weak passwords | 8–72 characters, stored with BCrypt |
+| AI abuse / cost | 10 recommendations per minute per user |
+
+API clients can still send `Authorization: Bearer <jwt>`; those requests carry
+no ambient credentials, so they skip the CSRF check.
 
 ## Observability
 
@@ -304,11 +322,13 @@ Set `LOG_FORMAT=logstash` or `gelf` to switch format.
 | Method | Path             | Auth   | Description |
 |--------|------------------|--------|-------------|
 | POST   | `/auth/register` | none   | `{email, password}` → create account |
-| POST   | `/auth/login`    | none   | `{email, password}` → `{token, email}` |
-| POST   | `/api/recommend` | Bearer | `{problem, region?, monthlyActiveUsers?, appType?, storageGb?, dataTransferGb?, highAvailability?}` → services, per-service costs, usage, reasoning, diagram |
-| GET    | `/api/history`   | Bearer | last 20 recommendations for the user |
+| POST   | `/auth/login`    | none   | `{email, password}` → `{email}` + httpOnly `auth_token` cookie |
+| GET    | `/auth/me`       | cookie | the signed-in email, or 401 |
+| POST   | `/auth/logout`   | cookie + CSRF | clears the cookie |
+| POST   | `/api/recommend` | cookie + CSRF, or Bearer | `{problem, region?, monthlyActiveUsers?, appType?, storageGb?, dataTransferGb?, highAvailability?}` → services, per-service costs, usage, reasoning, diagram |
+| GET    | `/api/history`   | cookie or Bearer | last 20 recommendations for the user |
 | GET    | `/actuator/health` | none | health with liveness/readiness groups |
-| GET    | `/actuator/prometheus` | Bearer | metrics in Prometheus format |
+| GET    | `/actuator/prometheus` | cookie or Bearer | metrics in Prometheus format |
 
 ## Configuration notes
 
@@ -323,8 +343,10 @@ Set `LOG_FORMAT=logstash` or `gelf` to switch format.
   `src/main/resources/pricing/gcp-prices.csv` with rows like
   `Compute Engine,24.46` and restart the backend. Each price is per unit of
   that service's driver (per instance-month, per GB, per million requests…).
-- The frontend reads `REACT_APP_API_BASE` at build time if the backend
-  isn't on localhost:8080.
+- The frontend calls the API on its own origin. In development
+  `src/setupProxy.js` forwards `/api` and `/auth` to `http://localhost:8080`
+  (override with `BACKEND_URL`); in production serve both from one origin,
+  since the auth cookie is `SameSite=Strict`.
 
 ## Roadmap
 
