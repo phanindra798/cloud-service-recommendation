@@ -16,16 +16,22 @@ those services fit, and a generated architecture diagram.
 - **Architecture reasoning** — the model explains why each service was chosen
 - **Architecture diagram** — Gemini writes a Mermaid flowchart, rendered
   live in the UI
-- **Multi-cloud cost comparison** — monthly estimate per provider with
-  best-value highlighting:
-  - Azure prices come **live** from the public
+- **Scale-aware cost comparison** — Gemini estimates the app's usage
+  (monthly users, requests, storage, data transfer) and every service is
+  priced from it, so a 50k-user chat app is not priced like a hobby project.
+  Each provider gets a per-service breakdown and a monthly total, with
+  best-value highlighting (see [How costs are estimated](#how-costs-are-estimated)):
+  - Azure unit prices come **live** from the public
     [Azure Retail Prices API](https://learn.microsoft.com/en-us/rest/api/cost-management/retail-prices/azure-retail-prices)
-    (no key needed), cached for 24 hours
-  - GCP prices load from a local CSV export if you provide one
-  - AWS uses a static baseline for now — the Price List Query API needs
+    (no key needed) where a matching meter exists, cached for 24 hours
+  - GCP unit prices load from a local CSV export if you provide one
+  - otherwise list prices are used — AWS's Price List Query API needs
     SigV4-signed requests, and the adapter plug point is ready
-  - every response reports its `pricingSource`, so it's always clear
-    whether a number is live or baseline
+  - every line item reports its source, so it's always clear whether a
+    number is live or an estimate
+- **11 services per cloud** — compute, containers, serverless, object
+  storage, SQL, NoSQL, cache, CDN, API gateway, queue and user auth,
+  mapped across AWS, Azure and GCP
 - **JWT authentication** — stateless Spring Security with BCrypt password
   hashing and 24-hour token expiry
 - **Per-user history** — past recommendations stored in PostgreSQL and
@@ -34,8 +40,8 @@ those services fit, and a generated architecture diagram.
   protect the AI quota; idle users are evicted so memory stays bounded
 - **Observability** — Spring Boot Actuator + Micrometer metrics (Prometheus
   endpoint) and structured JSON logs with a request ID on every line
-- **Tested** — 70 backend tests (JUnit 5, Mockito, MockMvc, Testcontainers
-  PostgreSQL) with a JaCoCo coverage gate, and 30 frontend tests (Jest,
+- **Tested** — 79 backend tests (JUnit 5, Mockito, MockMvc, Testcontainers
+  PostgreSQL) with a JaCoCo coverage gate, and 33 frontend tests (Jest,
   React Testing Library), run on every push by GitHub Actions
 - **Graceful degradation** — if Gemini or a pricing API is down, the app
   still answers with clearly labelled baseline data instead of failing
@@ -48,8 +54,9 @@ React frontend (JWT, Mermaid rendering)
         ▼
 Spring Boot backend
   1. validate input, check rate limit
-  2. GeminiService  → structured plan {services, reasoning, mermaid}
-  3. CostService    → map services to Azure/GCP equivalents, price them
+  2. GeminiService  → structured plan {services, reasoning, mermaid, usage}
+  3. CostService    → map services to Azure/GCP equivalents, size each one
+                      from the usage profile and price it
   4. save to history, return JSON
         │
         ▼
@@ -154,6 +161,38 @@ npm start
 
 Open http://localhost:3000, register an account and try a prompt.
 
+## How costs are estimated
+
+1. **Usage profile.** Gemini returns `monthlyActiveUsers`, `requestsPerMonth`,
+   `storageGb` and `dataTransferGb` alongside the services. Values are
+   clamped to a sane range; if the AI is down a default small-app profile is
+   used. Peak load is taken as 3× the monthly average request rate.
+2. **Drivers.** Each service is billed by one driver, and equivalent services
+   on all three clouds share it so totals are comparable:
+
+   | Driver | Quantity | Services |
+   |--------|----------|----------|
+   | compute instance | ⌈peak req/s ÷ 50⌉ | EC2, ECS Fargate (and equivalents) |
+   | database instance | ⌈peak req/s ÷ 500⌉ | RDS |
+   | cache node | ⌈peak req/s ÷ 5,000⌉ | ElastiCache |
+   | GB stored | `storageGb` | S3 |
+   | GB transferred | `dataTransferGb` | CloudFront |
+   | million requests | `requestsPerMonth` ÷ 1M | Lambda, DynamoDB, API Gateway, SQS |
+   | thousand users | `monthlyActiveUsers` ÷ 1,000 | Cognito |
+
+3. **Price.** `monthly cost = fixed fee + unit price × quantity`. Unit prices
+   are on-demand US list prices with free tiers excluded (live Azure / CSV
+   GCP prices replace them when available). Treat the totals as a
+   comparison between clouds, not a quote.
+
+The response includes the profile (`usage`) and a `breakdown` per provider:
+
+```json
+"breakdown": { "aws": [
+  { "service": "ECS Fargate", "quantity": 4, "unit": "instance",
+    "unitPrice": 18.02, "monthlyCost": 72.08, "source": "list-price estimate" }, …
+```
+
 ## Testing
 
 ### Backend
@@ -185,8 +224,8 @@ cd backend
 
 JaCoCo writes a report to `backend/target/site/jacoco/`, and `mvn verify`
 fails if coverage drops below 85% of lines or 75% of branches. Current
-coverage without Docker (Testcontainers test skipped): **95.2% lines,
-87.3% branches**.
+coverage without Docker (Testcontainers test skipped): **95.6% lines,
+88.7% branches**.
 
 ### Frontend
 
@@ -257,13 +296,15 @@ Set `LOG_FORMAT=logstash` or `gelf` to switch format.
   fetched for (default `centralindia`).
 - To enable GCP CSV pricing, drop a file at
   `src/main/resources/pricing/gcp-prices.csv` with rows like
-  `Compute Engine,6.85` and restart the backend.
+  `Compute Engine,24.46` and restart the backend. Each price is per unit of
+  that service's driver (per instance-month, per GB, per million requests…).
 - The frontend reads `REACT_APP_API_BASE` at build time if the backend
   isn't on localhost:8080.
 
 ## Roadmap
 
 - AWS Price List Query API integration (SigV4)
+- Let users edit the usage estimate and recalculate costs
 - Region selector for cost estimates
 - Clarifying-questions flow before recommending
 - Terraform export of the recommended stack
