@@ -25,23 +25,36 @@ function formatQuantity(quantity, unit) {
 }
 
 // The usage numbers costs were sized from, so the estimate is explainable.
-function UsageAssumptions({ usage }) {
+function UsageAssumptions({ usage, region, highAvailability }) {
   if (!usage) return null;
+  const sources = usage.sources || {};
   const facts = [
-    [compact.format(usage.monthlyActiveUsers), "monthly users"],
-    [compact.format(usage.requestsPerMonth), "requests / month"],
+    [compact.format(usage.monthlyActiveUsers), "monthly users", sources.monthlyActiveUsers],
+    [compact.format(usage.requestsPerMonth), "requests / month", sources.requestsPerMonth],
     [`${usage.peakRequestsPerSecond}`, "peak req/s"],
-    [`${compact.format(usage.storageGb)} GB`, "stored"],
-    [`${compact.format(usage.dataTransferGb)} GB`, "transferred / month"],
+    [`${compact.format(usage.storageGb)} GB`, "stored", sources.storageGb],
+    [`${compact.format(usage.dataTransferGb)} GB`, "transferred / month", sources.dataTransferGb],
   ];
   return (
     <div className="usage-block">
       <h3 className="result-section-title">Estimated usage</h3>
+      {(region || highAvailability || usage.appType) && (
+        <div className="assumption-chips">
+          {region && (
+            <span className="assumption-chip" title={`AWS ${region.aws} · Azure ${region.azure} · GCP ${region.gcp}`}>
+              📍 {region.label}
+            </span>
+          )}
+          {usage.appType && <span className="assumption-chip">📱 {usage.appType}</span>}
+          {highAvailability && <span className="assumption-chip">🛡️ High availability</span>}
+        </div>
+      )}
       <div className="usage-grid">
-        {facts.map(([value, label]) => (
+        {facts.map(([value, label, source]) => (
           <div key={label} className="usage-fact">
             <span className="usage-value">{value}</span>
             <span className="usage-label">{label}</span>
+            {source && <span className="usage-source">{source}</span>}
           </div>
         ))}
       </div>
@@ -99,7 +112,7 @@ export default function ResultView({ data }) {
         </div>
       )}
 
-      <UsageAssumptions usage={data.usage} />
+      <UsageAssumptions usage={data.usage} region={data.region} highAvailability={data.highAvailability} />
 
       <div className="provider-grid">
         {providers.map((p) => (

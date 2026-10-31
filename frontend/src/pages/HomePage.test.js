@@ -9,9 +9,19 @@ beforeEach(() => {
   mermaid.render.mockResolvedValue({ svg: "<svg></svg>" });
 });
 
-function submit(problem) {
-  userEvent.type(screen.getByRole("textbox"), problem);
+function describe(problem) {
+  userEvent.type(screen.getByRole("textbox", { name: "" }), problem);
   userEvent.click(screen.getByRole("button", { name: /get recommendation/i }));
+}
+
+// Describe the app and skip the follow-up questions.
+function submit(problem) {
+  describe(problem);
+  userEvent.click(screen.getByRole("button", { name: /skip/i }));
+}
+
+function sentBody() {
+  return JSON.parse(global.fetch.mock.calls[0][1].body);
 }
 
 test("sends the problem with the JWT and renders the recommendation", async () => {
@@ -27,6 +37,95 @@ test("sends the problem with the JWT and renders the recommendation", async () =
   expect(url).toMatch(/\/api\/recommend$/);
   expect(options.headers.Authorization).toBe("Bearer jwt-123");
   expect(JSON.parse(options.body)).toEqual({ problem: "a serverless todo app" });
+});
+
+test("asks follow-up questions before calling the API", () => {
+  global.fetch = jest.fn();
+  renderAt(<HomePage />);
+
+  describe("something cool");
+
+  expect(screen.getByText(/where are most of your users/i)).toBeInTheDocument();
+  expect(screen.getByText(/how many monthly users/i)).toBeInTheDocument();
+  expect(screen.getByText(/what kind of app/i)).toBeInTheDocument();
+  expect(screen.getByText(/stay online if a server fails/i)).toBeInTheDocument();
+  expect(global.fetch).not.toHaveBeenCalled();
+});
+
+test("sends the chosen answers with the problem", async () => {
+  global.fetch = jest.fn().mockResolvedValue(jsonResponse(SAMPLE_RESULT));
+  renderAt(<HomePage />);
+
+  describe("something cool");
+  userEvent.click(screen.getByRole("button", { name: "India" }));
+  userEvent.click(screen.getByRole("button", { name: "10K – 100K" }));
+  userEvent.click(screen.getByRole("button", { name: "E-commerce store" }));
+  userEvent.click(screen.getByRole("button", { name: /yes, it must stay up/i }));
+  userEvent.click(screen.getByRole("button", { name: /get estimate/i }));
+
+  await screen.findByText("Serverless fits spiky traffic.");
+  expect(sentBody()).toEqual({
+    problem: "something cool",
+    region: "INDIA",
+    monthlyActiveUsers: 50000,
+    appType: "ECOMMERCE",
+    highAvailability: true,
+  });
+});
+
+test("an exact user count overrides the range chips", async () => {
+  global.fetch = jest.fn().mockResolvedValue(jsonResponse(SAMPLE_RESULT));
+  renderAt(<HomePage />);
+
+  describe("something cool");
+  userEvent.click(screen.getByRole("button", { name: "1M+" }));
+  userEvent.type(screen.getByLabelText(/exact number of monthly users/i), "75000");
+  userEvent.click(screen.getByRole("button", { name: /get estimate/i }));
+
+  await screen.findByText("Serverless fits spiky traffic.");
+  expect(sentBody().monthlyActiveUsers).toBe(75000);
+});
+
+test("skips questions the description already answers and sends what it detected", async () => {
+  global.fetch = jest.fn().mockResolvedValue(jsonResponse(SAMPLE_RESULT));
+  renderAt(<HomePage />);
+
+  describe("a chat app for 50k users in India");
+
+  expect(screen.queryByText(/where are most of your users/i)).not.toBeInTheDocument();
+  expect(screen.queryByText(/how many monthly users/i)).not.toBeInTheDocument();
+  expect(screen.queryByText(/what kind of app/i)).not.toBeInTheDocument();
+  expect(screen.getByText(/stay online if a server fails/i)).toBeInTheDocument();
+
+  userEvent.click(screen.getByRole("button", { name: /skip/i }));
+
+  await screen.findByText("Serverless fits spiky traffic.");
+  expect(sentBody()).toEqual({
+    problem: "a chat app for 50k users in India",
+    region: "INDIA",
+    monthlyActiveUsers: 50000,
+    appType: "CHAT",
+  });
+});
+
+test("skipping sends only the problem", async () => {
+  global.fetch = jest.fn().mockResolvedValue(jsonResponse(SAMPLE_RESULT));
+  renderAt(<HomePage />);
+
+  submit("something cool");
+
+  await screen.findByText("Serverless fits spiky traffic.");
+  expect(sentBody()).toEqual({ problem: "something cool" });
+});
+
+test("editing the description closes the questions", () => {
+  global.fetch = jest.fn();
+  renderAt(<HomePage />);
+
+  describe("something cool");
+  userEvent.type(screen.getByRole("textbox", { name: "" }), "!");
+
+  expect(screen.queryByText(/a few quick questions/i)).not.toBeInTheDocument();
 });
 
 test("submit is disabled until something is typed", () => {

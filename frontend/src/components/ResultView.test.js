@@ -44,6 +44,22 @@ test("shows the usage the estimate was sized from", () => {
   expect(screen.getByText("1.5K GB")).toBeInTheDocument();
 });
 
+test("shows region, app type, high availability and where numbers came from", () => {
+  render(<ResultView data={{
+    ...NO_DIAGRAM,
+    region: { code: "INDIA", label: "India", aws: "ap-south-1", azure: "centralindia", gcp: "asia-south1" },
+    highAvailability: true,
+    usage: { ...NO_DIAGRAM.usage, appType: "E-commerce store",
+             sources: { monthlyActiveUsers: "you", requestsPerMonth: "app type", storageGb: "app type", dataTransferGb: "app type" } },
+  }} />);
+
+  expect(screen.getByText(/📍 India/)).toHaveAttribute("title", "AWS ap-south-1 · Azure centralindia · GCP asia-south1");
+  expect(screen.getByText(/E-commerce store/)).toBeInTheDocument();
+  expect(screen.getByText(/High availability/)).toBeInTheDocument();
+  expect(screen.getByText("monthly users").parentElement).toHaveTextContent("you");
+  expect(screen.getByText("requests / month").parentElement).toHaveTextContent("app type");
+});
+
 test("still renders history saved before per-service costs existed", () => {
   const { breakdown, usage, ...legacy } = NO_DIAGRAM;
   render(<ResultView data={{ ...legacy, cost: { aws: 7, azure: 8.2, gcp: 7.6 } }} />);

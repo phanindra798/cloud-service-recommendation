@@ -4,6 +4,8 @@ import { API_BASE } from "../lib/api";
 import { authHeader, clearAuth } from "../lib/auth";
 import ResultView from "../components/ResultView";
 import HistoryPanel from "../components/HistoryPanel";
+import FollowUpQuestions from "../components/FollowUpQuestions";
+import { pendingQuestions } from "../lib/questions";
 
 const PLACEHOLDERS = [
   "e.g. I need to build a real-time analytics pipeline for 10M daily events...",
@@ -21,6 +23,8 @@ export default function HomePage() {
   const [charCount, setCharCount] = useState(0);
   const [animateResult, setAnimateResult] = useState(false);
   const [historyRefresh, setHistoryRefresh] = useState(0);
+  // { questions, known } while the follow-up step is showing
+  const [followUp, setFollowUp] = useState(null);
   const navigate = useNavigate();
   const resultRef = useRef(null);
 
@@ -33,16 +37,36 @@ export default function HomePage() {
     setProblem(e.target.value);
     setCharCount(e.target.value.length);
     if (error) setError(null);
+    if (followUp) setFollowUp(null);
   };
 
-  const handleSubmit = async () => {
+  // Step 1: ask only what the description doesn't already say.
+  const handleSubmit = () => {
     if (!problem.trim()) { setError("Please describe your problem or use case first."); return; }
+    setError(null); setResult(null); setAnimateResult(false);
+    setFollowUp(pendingQuestions(problem));
+  };
+
+  // Step 2: run the recommendation with whatever was answered.
+  const runRecommendation = async (answers = {}) => {
+    const known = followUp ? followUp.known : {};
+    const body = { problem: problem.trim() };
+    // An answer picked in the follow-up wins; otherwise use what the description said
+    const region = answers.region || known.region;
+    const users = answers.users || known.users;
+    const appType = answers.appType || known.appType;
+    if (region) body.region = region;
+    if (users) body.monthlyActiveUsers = users;
+    if (appType) body.appType = appType;
+    if (answers.highAvailability) body.highAvailability = true;
+
+    setFollowUp(null);
     setLoading(true); setError(null); setResult(null); setAnimateResult(false);
     try {
       const res = await fetch(`${API_BASE}/api/recommend`, {
         method: "POST",
         headers: { "Content-Type": "application/json", ...authHeader() },
-        body: JSON.stringify({ problem: problem.trim() }),
+        body: JSON.stringify(body),
       });
       if (res.status === 401 || res.status === 403) {
         clearAuth();
@@ -65,6 +89,7 @@ export default function HomePage() {
   };
 
   const showHistoryEntry = (histProblem, histResult) => {
+    setFollowUp(null);
     setProblem(histProblem);
     setCharCount(histProblem.length);
     setResult(histResult);
@@ -110,7 +135,7 @@ export default function HomePage() {
           <div className="textarea-footer">
             <span className="char-count">{charCount} / 2000</span>
             {problem && (
-              <button className="clear-btn" onClick={() => { setProblem(""); setCharCount(0); setError(null); }}>
+              <button className="clear-btn" onClick={() => { setProblem(""); setCharCount(0); setError(null); setFollowUp(null); }}>
                 Clear
               </button>
             )}
@@ -166,6 +191,14 @@ export default function HomePage() {
 
           <ResultView data={result} />
         </div>
+      )}
+
+      {followUp && !loading && (
+        <FollowUpQuestions
+          questions={followUp.questions}
+          onSubmit={runRecommendation}
+          onSkip={() => runRecommendation({})}
+        />
       )}
 
       <HistoryPanel onSelect={showHistoryEntry} refreshKey={historyRefresh} />
