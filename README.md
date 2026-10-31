@@ -16,16 +16,22 @@ those services fit, and a generated architecture diagram.
 - **Architecture reasoning** — the model explains why each service was chosen
 - **Architecture diagram** — Gemini writes a Mermaid flowchart, rendered
   live in the UI
-- **Multi-cloud cost comparison** — monthly estimate per provider with
-  best-value highlighting:
-  - Azure prices come **live** from the public
+- **Scale-aware cost comparison** — Gemini estimates the app's usage
+  (monthly users, requests, storage, data transfer) and every service is
+  priced from it, so a 50k-user chat app is not priced like a hobby project.
+  Each provider gets a per-service breakdown and a monthly total, with
+  best-value highlighting (see [How costs are estimated](#how-costs-are-estimated)):
+  - Azure unit prices come **live** from the public
     [Azure Retail Prices API](https://learn.microsoft.com/en-us/rest/api/cost-management/retail-prices/azure-retail-prices)
-    (no key needed), cached for 24 hours
-  - GCP prices load from a local CSV export if you provide one
-  - AWS uses a static baseline for now — the Price List Query API needs
+    (no key needed) where a matching meter exists, cached for 24 hours
+  - GCP unit prices load from a local CSV export if you provide one
+  - otherwise list prices are used — AWS's Price List Query API needs
     SigV4-signed requests, and the adapter plug point is ready
-  - every response reports its `pricingSource`, so it's always clear
-    whether a number is live or baseline
+  - every line item reports its source, so it's always clear whether a
+    number is live or an estimate
+- **11 services per cloud** — compute, containers, serverless, object
+  storage, SQL, NoSQL, cache, CDN, API gateway, queue and user auth,
+  mapped across AWS, Azure and GCP
 - **JWT authentication** — stateless Spring Security with BCrypt password
   hashing and 24-hour token expiry
 - **Per-user history** — past recommendations stored in PostgreSQL and
@@ -34,8 +40,13 @@ those services fit, and a generated architecture diagram.
   protect the AI quota; idle users are evicted so memory stays bounded
 - **Observability** — Spring Boot Actuator + Micrometer metrics (Prometheus
   endpoint) and structured JSON logs with a request ID on every line
-- **Tested** — 70 backend tests (JUnit 5, Mockito, MockMvc, Testcontainers
-  PostgreSQL) with a JaCoCo coverage gate, and 30 frontend tests (Jest,
+- **Follow-up questions** — after you describe the app, a quick chat-style
+  step asks where your users are, how many there will be, what kind of app it
+  is and whether it must stay up, with tap-to-select chips. Questions the
+  description already answers ("a chat app for 50k users in India") are
+  skipped, and every question can be skipped
+- **Tested** — 93 backend tests (JUnit 5, Mockito, MockMvc, Testcontainers
+  PostgreSQL) with a JaCoCo coverage gate, and 45 frontend tests (Jest,
   React Testing Library), run on every push by GitHub Actions
 - **Graceful degradation** — if Gemini or a pricing API is down, the app
   still answers with clearly labelled baseline data instead of failing
@@ -48,8 +59,9 @@ React frontend (JWT, Mermaid rendering)
         ▼
 Spring Boot backend
   1. validate input, check rate limit
-  2. GeminiService  → structured plan {services, reasoning, mermaid}
-  3. CostService    → map services to Azure/GCP equivalents, price them
+  2. GeminiService  → structured plan {services, reasoning, mermaid, usage}
+  3. CostService    → map services to Azure/GCP equivalents, size each one
+                      from the usage profile and price it
   4. save to history, return JSON
         │
         ▼
@@ -154,6 +166,55 @@ npm start
 
 Open http://localhost:3000, register an account and try a prompt.
 
+## How costs are estimated
+
+1. **Usage profile.** Gemini returns `monthlyActiveUsers`, `requestsPerMonth`,
+   `storageGb` and `dataTransferGb` alongside the services. Anything the user
+   gave wins over the AI, field by field:
+
+   | Priority | Source | Example |
+   |----------|--------|---------|
+   | 1 | the user's own number | "75,000 users", exact storage |
+   | 2 | app-type profile × user count | e-commerce: 400 requests, 10 MB stored, 100 MB served per user / month |
+   | 3 | AI estimate, scaled to the user's count | user count corrected, AI's per-user ratios kept |
+   | 4 | AI estimate as-is | nothing given |
+
+   Values are clamped to a sane range; if the AI is down a default
+   small-app profile is used. Peak load is taken as 3× the monthly average
+   request rate. The response tags each number with its source.
+2. **Drivers.** Each service is billed by one driver, and equivalent services
+   on all three clouds share it so totals are comparable:
+
+   | Driver | Quantity | Services |
+   |--------|----------|----------|
+   | compute instance | ⌈peak req/s ÷ 50⌉ | EC2, ECS Fargate (and equivalents) |
+   | database instance | ⌈peak req/s ÷ 500⌉ | RDS |
+   | cache node | ⌈peak req/s ÷ 5,000⌉ | ElastiCache |
+   | GB stored | `storageGb` | S3 |
+   | GB transferred | `dataTransferGb` | CloudFront |
+   | million requests | `requestsPerMonth` ÷ 1M | Lambda, DynamoDB, API Gateway, SQS |
+   | thousand users | `monthlyActiveUsers` ÷ 1,000 | Cognito |
+
+3. **High availability** (optional): app servers become at least two, and
+   each database and cache instance gets a standby. Serverless and managed
+   storage are already redundant, so they're unchanged.
+4. **Region.** Ten regions (India, US, UK, Germany/EU, Singapore, Japan,
+   Australia, Brazil, Canada, UAE) map to the nearest AWS/Azure/GCP region.
+   List prices get an approximate regional uplift (e.g. ×1.05 India, ×1.45
+   Brazil); live Azure prices are fetched for that exact region.
+5. **Price.** `monthly cost = fixed fee + unit price × quantity`. Unit prices
+   are on-demand US list prices with free tiers excluded (live Azure / CSV
+   GCP prices replace them when available). Treat the totals as a
+   comparison between clouds, not a quote.
+
+The response includes the profile (`usage`) and a `breakdown` per provider:
+
+```json
+"breakdown": { "aws": [
+  { "service": "ECS Fargate", "quantity": 4, "unit": "instance",
+    "unitPrice": 18.02, "monthlyCost": 72.08, "source": "list-price estimate" }, …
+```
+
 ## Testing
 
 ### Backend
@@ -185,8 +246,8 @@ cd backend
 
 JaCoCo writes a report to `backend/target/site/jacoco/`, and `mvn verify`
 fails if coverage drops below 85% of lines or 75% of branches. Current
-coverage without Docker (Testcontainers test skipped): **95.2% lines,
-87.3% branches**.
+coverage without Docker (Testcontainers test skipped): **96.4% lines,
+88.8% branches**.
 
 ### Frontend
 
@@ -242,7 +303,7 @@ Set `LOG_FORMAT=logstash` or `gelf` to switch format.
 |--------|------------------|--------|-------------|
 | POST   | `/auth/register` | none   | `{email, password}` → create account |
 | POST   | `/auth/login`    | none   | `{email, password}` → `{token, email}` |
-| POST   | `/api/recommend` | Bearer | `{problem}` → services, costs, reasoning, diagram |
+| POST   | `/api/recommend` | Bearer | `{problem, region?, monthlyActiveUsers?, appType?, storageGb?, dataTransferGb?, highAvailability?}` → services, per-service costs, usage, reasoning, diagram |
 | GET    | `/api/history`   | Bearer | last 20 recommendations for the user |
 | GET    | `/actuator/health` | none | health with liveness/readiness groups |
 | GET    | `/actuator/prometheus` | Bearer | metrics in Prometheus format |
@@ -253,17 +314,17 @@ Set `LOG_FORMAT=logstash` or `gelf` to switch format.
   Never commit real values.
 - `JWT_SECRET` has a development-only default; always set a real one
   (32+ bytes, e.g. `openssl rand -base64 48`) in any deployed environment.
-- `AZURE_PRICING_REGION` changes which region live Azure prices are
-  fetched for (default `centralindia`).
+- The pricing region comes from each request (`region`, default `US`);
+  live Azure prices are fetched for the matching Azure region.
 - To enable GCP CSV pricing, drop a file at
   `src/main/resources/pricing/gcp-prices.csv` with rows like
-  `Compute Engine,6.85` and restart the backend.
+  `Compute Engine,24.46` and restart the backend. Each price is per unit of
+  that service's driver (per instance-month, per GB, per million requests…).
 - The frontend reads `REACT_APP_API_BASE` at build time if the backend
   isn't on localhost:8080.
 
 ## Roadmap
 
 - AWS Price List Query API integration (SigV4)
-- Region selector for cost estimates
-- Clarifying-questions flow before recommending
+- Let users edit the usage estimate and recalculate costs
 - Terraform export of the recommended stack

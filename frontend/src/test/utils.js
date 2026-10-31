@@ -46,7 +46,22 @@ export const SAMPLE_RESULT = {
   aws: ["Lambda", "DynamoDB"],
   azure: ["Functions", "Cosmos DB"],
   gcp: ["Cloud Functions", "Firestore"],
-  cost: { aws: 7, azure: 8.2, gcp: 7.6 },
+  cost: { aws: 3.06, azure: 3.5, gcp: 4.2 },
+  breakdown: {
+    aws: [
+      { service: "Lambda", quantity: 2, unit: "million requests", unitPrice: 1.03, monthlyCost: 2.06, source: "list-price estimate" },
+      { service: "DynamoDB", quantity: 2, unit: "million requests", unitPrice: 0.5, monthlyCost: 1, source: "list-price estimate" },
+    ],
+    azure: [
+      { service: "Functions", quantity: 2, unit: "million requests", unitPrice: 1, monthlyCost: 2, source: "list-price estimate" },
+      { service: "Cosmos DB", quantity: 2, unit: "million requests", unitPrice: 0.75, monthlyCost: 1.5, source: "list-price estimate" },
+    ],
+    gcp: [
+      { service: "Cloud Functions", quantity: 2, unit: "million requests", unitPrice: 1.2, monthlyCost: 2.4, source: "list-price estimate" },
+      { service: "Firestore", quantity: 2, unit: "million requests", unitPrice: 0.9, monthlyCost: 1.8, source: "list-price estimate" },
+    ],
+  },
+  usage: { monthlyActiveUsers: 50000, requestsPerMonth: 2000000, storageGb: 50, dataTransferGb: 1500, peakRequestsPerSecond: 2.3 },
   best: "AWS",
   pricingSource: { aws: "static baseline", azure: "live (Azure Retail Prices API)", gcp: "static baseline" },
   reasoning: "Serverless fits spiky traffic.",

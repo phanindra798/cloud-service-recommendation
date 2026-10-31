@@ -19,9 +19,11 @@ import java.util.concurrent.ConcurrentHashMap;
  * pricing API; Google offers pricing exports/CSV downloads instead).
  *
  * Expected file: src/main/resources/pricing/gcp-prices.csv
- * Format (no header): gcpServiceName,monthlyUsd
- *   Compute Engine,6.85
- *   Cloud Storage,2.30
+ * Format (no header): gcpServiceName,unitPriceUsd — the price per unit of the
+ * service's driver in ServiceCatalog (per instance-month, per GB, per million
+ * requests, ...):
+ *   Compute Engine,24.46
+ *   Cloud Storage,0.020
  *
  * When the file is absent, callers fall back to the static baseline.
  */
@@ -68,7 +70,7 @@ public class GcpCsvPricing {
         return loaded;
     }
 
-    public Optional<Double> getMonthlyPrice(String gcpService) {
+    public Optional<Double> getUnitPrice(String gcpService) {
         return Optional.ofNullable(prices.get(gcpService));
     }
 }

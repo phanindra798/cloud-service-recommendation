@@ -15,15 +15,59 @@ test("renders nothing without data", () => {
   expect(container).toBeEmptyDOMElement();
 });
 
-test("lists services and monthly cost for every provider", () => {
+test("lists services and monthly total for every provider", () => {
   render(<ResultView data={NO_DIAGRAM} />);
 
   ["Lambda", "DynamoDB", "Functions", "Cosmos DB", "Cloud Functions", "Firestore"].forEach((s) =>
     expect(screen.getByText(s)).toBeInTheDocument()
   );
-  expect(screen.getByText("$7/mo")).toBeInTheDocument();
-  expect(screen.getByText("$8.2/mo")).toBeInTheDocument();
-  expect(screen.getByText("$7.6/mo")).toBeInTheDocument();
+  expect(screen.getByText("$3.06/mo")).toBeInTheDocument();
+  expect(screen.getByText("$3.50/mo")).toBeInTheDocument();
+  expect(screen.getByText("$4.20/mo")).toBeInTheDocument();
+});
+
+test("shows quantity and cost for each service", () => {
+  render(<ResultView data={NO_DIAGRAM} />);
+
+  const lambda = screen.getByText("Lambda").closest(".cost-row");
+  expect(lambda).toHaveTextContent("2 million requests");
+  expect(lambda).toHaveTextContent("$2.06");
+});
+
+test("shows the usage the estimate was sized from", () => {
+  render(<ResultView data={NO_DIAGRAM} />);
+
+  expect(screen.getByText("Estimated usage")).toBeInTheDocument();
+  expect(screen.getByText("50K")).toBeInTheDocument();
+  expect(screen.getByText("monthly users")).toBeInTheDocument();
+  expect(screen.getByText("2M")).toBeInTheDocument();
+  expect(screen.getByText("1.5K GB")).toBeInTheDocument();
+});
+
+test("shows region, app type, high availability and where numbers came from", () => {
+  render(<ResultView data={{
+    ...NO_DIAGRAM,
+    region: { code: "INDIA", label: "India", aws: "ap-south-1", azure: "centralindia", gcp: "asia-south1" },
+    highAvailability: true,
+    usage: { ...NO_DIAGRAM.usage, appType: "E-commerce store",
+             sources: { monthlyActiveUsers: "you", requestsPerMonth: "app type", storageGb: "app type", dataTransferGb: "app type" } },
+  }} />);
+
+  expect(screen.getByText(/📍 India/)).toHaveAttribute("title", "AWS ap-south-1 · Azure centralindia · GCP asia-south1");
+  expect(screen.getByText(/E-commerce store/)).toBeInTheDocument();
+  expect(screen.getByText(/High availability/)).toBeInTheDocument();
+  expect(screen.getByText("monthly users").parentElement).toHaveTextContent("you");
+  expect(screen.getByText("requests / month").parentElement).toHaveTextContent("app type");
+});
+
+test("still renders history saved before per-service costs existed", () => {
+  const { breakdown, usage, ...legacy } = NO_DIAGRAM;
+  render(<ResultView data={{ ...legacy, cost: { aws: 7, azure: 8.2, gcp: 7.6 } }} />);
+
+  expect(screen.getByText("Lambda")).toBeInTheDocument();
+  expect(screen.getByText("$7.00/mo")).toBeInTheDocument();
+  expect(screen.queryByText("Estimated usage")).not.toBeInTheDocument();
+  expect(document.querySelector(".cost-row")).toBeNull();
 });
 
 test("highlights the cheapest provider", () => {
