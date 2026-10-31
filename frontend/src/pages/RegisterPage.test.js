@@ -24,9 +24,9 @@ test("rejects short passwords", () => {
   global.fetch = jest.fn();
   renderAt(<RegisterPage />, { path: "/register", route: "/register" });
 
-  fill("alice@example.com", "123", "123");
+  fill("alice@example.com", "1234567", "1234567");
 
-  expect(screen.getByText("Password must be at least 6 characters.")).toBeInTheDocument();
+  expect(screen.getByText("Password must be at least 8 characters.")).toBeInTheDocument();
 });
 
 test("successful registration shows confirmation and redirects to login", async () => {

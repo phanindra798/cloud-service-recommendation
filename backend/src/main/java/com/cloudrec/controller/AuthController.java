@@ -28,8 +28,12 @@ public class AuthController {
         if (!email.matches("^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$")) {
             return ResponseEntity.badRequest().body("Invalid email address");
         }
-        if (password.length() < 6) {
-            return ResponseEntity.badRequest().body("Password must be at least 6 characters");
+        if (password.length() < 8) {
+            return ResponseEntity.badRequest().body("Password must be at least 8 characters");
+        }
+        if (password.length() > 72) {
+            // BCrypt ignores bytes past 72, so longer passwords would silently match truncated ones
+            return ResponseEntity.badRequest().body("Password must be at most 72 characters");
         }
 
         String response = service.register(email, password);

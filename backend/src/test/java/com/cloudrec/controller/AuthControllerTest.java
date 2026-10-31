@@ -60,9 +60,16 @@ class AuthControllerTest {
 
     @Test
     void shortPasswordIsRejected() throws Exception {
-        register("alice@example.com", "123")
+        register("alice@example.com", "1234567")
                 .andExpect(status().isBadRequest())
-                .andExpect(content().string("Password must be at least 6 characters"));
+                .andExpect(content().string("Password must be at least 8 characters"));
+    }
+
+    @Test
+    void overlongPasswordIsRejected() throws Exception {
+        register("alice@example.com", "a".repeat(73))
+                .andExpect(status().isBadRequest())
+                .andExpect(content().string("Password must be at most 72 characters"));
     }
 
     @Test

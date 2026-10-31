@@ -140,6 +140,7 @@ export DB_URL=jdbc:postgresql://localhost:5432/csrdb
 export DB_USERNAME=csr
 export DB_PASSWORD=csrpass
 export GEMINI_API_KEY=your-key-here
+export JWT_SECRET="$(openssl rand -base64 48)"
 ./mvnw spring-boot:run
 ```
 
@@ -151,6 +152,7 @@ $env:DB_URL = "jdbc:postgresql://localhost:5432/csrdb"
 $env:DB_USERNAME = "csr"
 $env:DB_PASSWORD = "csrpass"
 $env:GEMINI_API_KEY = "your-key-here"
+$env:JWT_SECRET = [Convert]::ToBase64String((1..48 | ForEach-Object { Get-Random -Maximum 256 }))
 .\mvnw.cmd spring-boot:run
 ```
 
@@ -312,8 +314,9 @@ Set `LOG_FORMAT=logstash` or `gelf` to switch format.
 
 - All secrets come from environment variables — see `.env.example`.
   Never commit real values.
-- `JWT_SECRET` has a development-only default; always set a real one
-  (32+ bytes, e.g. `openssl rand -base64 48`) in any deployed environment.
+- `JWT_SECRET` is required (32+ bytes, e.g. `openssl rand -base64 48`).
+  There is no default: the backend refuses to start without one, so a
+  deployment can never run with a guessable signing key.
 - The pricing region comes from each request (`region`, default `US`);
   live Azure prices are fetched for the matching Azure region.
 - To enable GCP CSV pricing, drop a file at
