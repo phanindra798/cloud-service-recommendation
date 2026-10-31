@@ -19,7 +19,7 @@ class AzurePricingClientTest {
     @BeforeEach
     void setUp() throws Exception {
         server = new StubHttpServer();
-        client = new AzurePricingClient("westeurope", server.url("/prices"), false);
+        client = new AzurePricingClient(server.url("/prices"), false);
     }
 
     @AfterEach
@@ -36,7 +36,7 @@ class AzurePricingClientTest {
                 ]}
                 """);
 
-        assertThat(client.getUnitPrice("Virtual Machines")).hasValueSatisfying(
+        assertThat(client.getUnitPrice("Virtual Machines", "westeurope")).hasValueSatisfying(
                 p -> assertThat(p).isCloseTo(36.5, within(0.001)));
     }
 
@@ -44,7 +44,7 @@ class AzurePricingClientTest {
     void queriesConfiguredRegionWithServiceFilter() {
         server.respond(200, "{\"Items\": [{\"productName\": \"SQL\", \"retailPrice\": 0.02, \"unitOfMeasure\": \"1 Hour\"}]}");
 
-        client.getUnitPrice("SQL Database");
+        client.getUnitPrice("SQL Database", "westeurope");
 
         String uri = URLDecoder.decode(server.requests().get(0).uri(), StandardCharsets.UTF_8);
         assertThat(uri).contains("serviceName eq 'SQL Database'").contains("armRegionName eq 'westeurope'");
@@ -54,23 +54,36 @@ class AzurePricingClientTest {
     void cachesPricesBetweenCalls() {
         server.respond(200, "{\"Items\": [{\"productName\": \"Storage\", \"retailPrice\": 0.0184, \"unitOfMeasure\": \"1 GB/Month\"}]}");
 
-        assertThat(client.getUnitPrice("Blob Storage")).contains(0.0184);
-        assertThat(client.getUnitPrice("Blob Storage")).contains(0.0184);
+        assertThat(client.getUnitPrice("Blob Storage", "westeurope")).contains(0.0184);
+        assertThat(client.getUnitPrice("Blob Storage", "westeurope")).contains(0.0184);
         assertThat(server.requests()).hasSize(1);
+    }
+
+    @Test
+    void cachesPerRegion() {
+        server.respond(200, "{\"Items\": [{\"productName\": \"VM\", \"retailPrice\": 0.05, \"unitOfMeasure\": \"1 Hour\"}]}");
+
+        client.getUnitPrice("Virtual Machines", "westeurope");
+        client.getUnitPrice("Virtual Machines", "centralindia");
+        client.getUnitPrice("Virtual Machines", "centralindia");
+
+        assertThat(server.requests()).hasSize(2);
+        assertThat(URLDecoder.decode(server.requests().get(1).uri(), StandardCharsets.UTF_8))
+                .contains("armRegionName eq 'centralindia'");
     }
 
     @Test
     void emptyWhenApiFails() {
         server.respond(500, "");
 
-        assertThat(client.getUnitPrice("Virtual Machines")).isEmpty();
+        assertThat(client.getUnitPrice("Virtual Machines", "westeurope")).isEmpty();
     }
 
     @Test
     void emptyWhenNoUsablePrice() {
         server.respond(200, "{\"Items\": [{\"productName\": \"X\", \"retailPrice\": 0, \"unitOfMeasure\": \"1 Hour\"}]}");
 
-        assertThat(client.getUnitPrice("Virtual Machines")).isEmpty();
+        assertThat(client.getUnitPrice("Virtual Machines", "westeurope")).isEmpty();
     }
 
     @Test
@@ -78,7 +91,7 @@ class AzurePricingClientTest {
         assertThat(client.supports("Quantum Computer")).isFalse();
         assertThat(client.supports("Functions")).as("no meter matches its per-request unit").isFalse();
         assertThat(client.supports("Virtual Machines")).isTrue();
-        assertThat(client.getUnitPrice("Quantum Computer")).isEmpty();
+        assertThat(client.getUnitPrice("Quantum Computer", "westeurope")).isEmpty();
         assertThat(server.requests()).isEmpty();
     }
 

@@ -109,7 +109,7 @@ class CostServiceTest {
     @Test
     void usesLiveAzureAndCsvGcpUnitPricesAndReportsSource() {
         when(azure.supports("Virtual Machines")).thenReturn(true);
-        when(azure.getUnitPrice("Virtual Machines")).thenReturn(Optional.of(20.0));
+        when(azure.getUnitPrice("Virtual Machines", "eastus")).thenReturn(Optional.of(20.0));
         when(gcp.getUnitPrice("Compute Engine")).thenReturn(Optional.of(50.0));
 
         Map<String, Object> result = costs.process(List.of("EC2"), LARGE);
@@ -125,12 +125,40 @@ class CostServiceTest {
     @Test
     void countsAzureFallbacksOnlyForServicesWithALiveLookup() {
         when(azure.supports("Virtual Machines")).thenReturn(true);
-        when(azure.getUnitPrice("Virtual Machines")).thenReturn(Optional.empty());
+        when(azure.getUnitPrice("Virtual Machines", "eastus")).thenReturn(Optional.empty());
 
         costs.process(List.of("EC2", "Lambda"), SMALL);
 
         assertThat(meters.get("pricing.azure.fallbacks").tag("service", "Virtual Machines").counter().count()).isEqualTo(1.0);
         assertThat(meters.find("pricing.azure.fallbacks").tag("service", "Functions").counter()).isNull();
+    }
+
+    @Test
+    void regionScalesListPricesAndPicksRegionalAzurePrices() {
+        when(azure.supports("Virtual Machines")).thenReturn(true);
+        when(azure.getUnitPrice("Virtual Machines", "centralindia")).thenReturn(Optional.of(25.0));
+
+        Map<String, Object> result = costs.process(List.of("EC2"), SMALL, Region.INDIA, false);
+
+        // AWS list price × 1.05 India uplift; Azure live price for centralindia used as-is
+        assertThat(items(result, "aws").get(0)).containsEntry("unitPrice", 31.8885).containsEntry("monthlyCost", 31.89);
+        assertThat(items(result, "azure").get(0)).containsEntry("unitPrice", 25.0);
+        @SuppressWarnings("unchecked")
+        Map<String, Object> region = (Map<String, Object>) result.get("region");
+        assertThat(region).containsEntry("code", "INDIA").containsEntry("aws", "ap-south-1")
+                .containsEntry("azure", "centralindia").containsEntry("gcp", "asia-south1");
+    }
+
+    @Test
+    void highAvailabilityAddsRedundancyOnlyWhereItCosts() {
+        List<String> stack = List.of("EC2", "RDS", "ElastiCache", "Lambda");
+
+        Map<String, Object> single = costs.process(stack, SMALL, Region.US, false);
+        Map<String, Object> ha = costs.process(stack, SMALL, Region.US, true);
+
+        assertThat(items(ha, "aws")).extracting(i -> i.get("quantity")).containsExactly(2.0, 2.0, 2.0, 1.0);
+        assertThat(items(single, "aws")).extracting(i -> i.get("quantity")).containsExactly(1.0, 1.0, 1.0, 1.0);
+        assertThat(ha.get("highAvailability")).isEqualTo(true);
     }
 
     @Test

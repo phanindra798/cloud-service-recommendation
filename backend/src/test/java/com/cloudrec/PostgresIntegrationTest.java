@@ -22,6 +22,7 @@ import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
@@ -55,7 +56,7 @@ class PostgresIntegrationTest {
 
     @Test
     void fullUserJourney() throws Exception {
-        when(gemini.getRecommendation(anyString())).thenReturn(new GeminiService.GeminiResult(
+        when(gemini.getRecommendation(anyString(), any())).thenReturn(new GeminiService.GeminiResult(
                 List.of("EC2", "RDS"), "Classic two-tier app.", "graph TD; User-->EC2; EC2-->RDS;",
                 UsageProfile.DEFAULT, false));
 

@@ -1,5 +1,8 @@
 package com.cloudrec.service;
 
+import com.cloudrec.service.pricing.AppType;
+import com.cloudrec.service.pricing.Region;
+import com.cloudrec.service.pricing.Requirements;
 import com.cloudrec.service.pricing.ServiceCatalog;
 import com.cloudrec.service.pricing.UsageProfile;
 import com.cloudrec.support.StubHttpServer;
@@ -72,6 +75,19 @@ class GeminiServiceTest {
         assertThat(body.at("/generationConfig/responseSchema/required").toString()).contains("usage");
         assertThat(body.at("/generationConfig/responseSchema/properties/usage/properties/requestsPerMonth/type").asText())
                 .isEqualTo("INTEGER");
+    }
+
+    @Test
+    void includesFormRequirementsInThePrompt() throws Exception {
+        server.respond(200, geminiResponse(Map.of("services", List.of("EC2"), "reasoning", "r", "mermaid", "m")));
+
+        gemini.getRecommendation("an online shop",
+                new Requirements(Region.INDIA, 20_000L, AppType.ECOMMERCE, null, null, true));
+
+        String prompt = mapper.readTree(server.requests().get(0).body()).at("/contents/0/parts/0/text").asText();
+        assertThat(prompt).contains("users are mainly in India")
+                .contains("about 20000 monthly active users")
+                .contains("highly available");
     }
 
     @Test

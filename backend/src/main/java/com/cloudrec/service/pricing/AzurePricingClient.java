@@ -45,7 +45,6 @@ public class AzurePricingClient {
             .build();
 
     private final Map<String, CachedPrice> cache = new ConcurrentHashMap<>();
-    private final String region;
     private final String apiUrl;
     private final boolean warmCacheOnStartup;
 
@@ -53,10 +52,8 @@ public class AzurePricingClient {
     private final Map<String, String> filters;
 
     public AzurePricingClient(
-            @Value("${azure.pricing.region:centralindia}") String region,
             @Value("${azure.pricing.api-url:https://prices.azure.com/api/retail/prices}") String apiUrl,
             @Value("${azure.pricing.warm-cache:true}") boolean warmCacheOnStartup) {
-        this.region = region;
         this.apiUrl = apiUrl;
         this.warmCacheOnStartup = warmCacheOnStartup;
         this.filters = Map.of(
@@ -73,11 +70,11 @@ public class AzurePricingClient {
 
     private record CachedPrice(double unitPrice, long fetchedAt) {}
 
-    /** Warm the cache in the background at startup so first user request is fast. */
+    /** Warm the cache for the default region in the background so the first request is fast. */
     @EventListener(ContextRefreshedEvent.class)
     public void warmCache() {
         if (!warmCacheOnStartup) return;
-        CompletableFuture.runAsync(() -> filters.keySet().forEach(this::getUnitPrice));
+        CompletableFuture.runAsync(() -> filters.keySet().forEach(s -> getUnitPrice(s, Region.US.azure())));
     }
 
     /** Whether this service has a live price lookup at all. */
@@ -85,12 +82,13 @@ public class AzurePricingClient {
         return filters.containsKey(azureService);
     }
 
-    /** USD per unit (instance-month or GB) for the given Azure service, empty if no live price. */
-    public Optional<Double> getUnitPrice(String azureService) {
+    /** USD per unit (instance-month or GB) for the service in an Azure region, empty if no live price. */
+    public Optional<Double> getUnitPrice(String azureService, String region) {
         String filter = filters.get(azureService);
         if (filter == null) return Optional.empty();
 
-        CachedPrice cached = cache.get(azureService);
+        String cacheKey = azureService + "|" + region;
+        CachedPrice cached = cache.get(cacheKey);
         if (cached != null && System.currentTimeMillis() - cached.fetchedAt() < CACHE_TTL_MS) {
             return Optional.of(cached.unitPrice());
         }
@@ -120,12 +118,12 @@ public class AzurePricingClient {
                 Double unitPrice = toUnitPrice(price, item.path("unitOfMeasure").asText(""));
                 if (unitPrice != null) {
                     double rounded = Math.round(unitPrice * 10_000.0) / 10_000.0;
-                    cache.put(azureService, new CachedPrice(rounded, System.currentTimeMillis()));
+                    cache.put(cacheKey, new CachedPrice(rounded, System.currentTimeMillis()));
                     return Optional.of(rounded);
                 }
             }
         } catch (Exception e) {
-            log.warn("Azure pricing lookup failed for {}: {}", azureService, e.toString());
+            log.warn("Azure pricing lookup failed for {} in {}: {}", azureService, region, e.toString());
         }
         return Optional.empty();
     }

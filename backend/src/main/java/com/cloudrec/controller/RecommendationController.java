@@ -5,6 +5,9 @@ import com.cloudrec.entity.RecommendationHistory;
 import com.cloudrec.repository.RecommendationHistoryRepository;
 import com.cloudrec.service.RateLimiterService;
 import com.cloudrec.service.RecommendationService;
+import com.cloudrec.service.pricing.AppType;
+import com.cloudrec.service.pricing.Region;
+import com.cloudrec.service.pricing.Requirements;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -46,13 +49,15 @@ public class RecommendationController {
             throw new IllegalArgumentException("Problem description too long (max 2000 characters)");
         }
 
+        Requirements requirements = toRequirements(request);
+
         String email = auth.getName();
         if (!rateLimiter.allow(email)) {
             return ResponseEntity.status(429)
                     .body(Map.of("error", "Rate limit exceeded: max 10 requests per minute"));
         }
 
-        Map<String, Object> result = service.getRecommendation(problem);
+        Map<String, Object> result = service.getRecommendation(problem, requirements);
 
         try {
             RecommendationHistory entry = new RecommendationHistory();
@@ -66,6 +71,32 @@ public class RecommendationController {
         }
 
         return ResponseEntity.ok(result);
+    }
+
+    private static Requirements toRequirements(RecommendRequest r) {
+        return new Requirements(
+                parseEnum(Region.class, r.getRegion(), "region"),
+                checkRange(r.getMonthlyActiveUsers(), 1, 1_000_000_000L, "monthlyActiveUsers"),
+                parseEnum(AppType.class, r.getAppType(), "appType"),
+                checkRange(r.getStorageGb(), 1, 10_000_000L, "storageGb"),
+                checkRange(r.getDataTransferGb(), 1, 10_000_000L, "dataTransferGb"),
+                Boolean.TRUE.equals(r.getHighAvailability()));
+    }
+
+    private static <E extends Enum<E>> E parseEnum(Class<E> type, String value, String field) {
+        if (value == null || value.isBlank()) return null;
+        try {
+            return Enum.valueOf(type, value.trim().toUpperCase());
+        } catch (IllegalArgumentException e) {
+            throw new IllegalArgumentException("Unknown " + field + ": " + value);
+        }
+    }
+
+    private static Long checkRange(Long value, long min, long max, String field) {
+        if (value != null && (value < min || value > max)) {
+            throw new IllegalArgumentException(field + " must be between " + min + " and " + max);
+        }
+        return value;
     }
 
     @GetMapping("/history")

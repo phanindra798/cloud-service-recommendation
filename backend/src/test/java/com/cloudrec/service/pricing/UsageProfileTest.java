@@ -42,4 +42,17 @@ class UsageProfileTest {
         assertThat(Driver.STORAGE_GB.quantity(busy)).isEqualTo(5_000);
         assertThat(Driver.TRANSFER_GB.quantity(busy)).isEqualTo(50_000);
     }
+
+    @Test
+    void highAvailabilityRules() {
+        UsageProfile quiet = new UsageProfile(100, 10_000, 5, 5);
+        UsageProfile busy = new UsageProfile(1_000_000, 1_000_000_000, 5_000, 50_000);
+
+        assertThat(Driver.COMPUTE_INSTANCE.quantity(quiet, true)).isEqualTo(2);  // at least two
+        assertThat(Driver.COMPUTE_INSTANCE.quantity(busy, true)).isEqualTo(24);  // already more than two
+        assertThat(Driver.DATABASE_INSTANCE.quantity(busy, true)).isEqualTo(6);  // standby per primary
+        assertThat(Driver.CACHE_NODE.quantity(quiet, true)).isEqualTo(2);
+        assertThat(Driver.STORAGE_GB.quantity(quiet, true)).isEqualTo(5);        // managed, unchanged
+        assertThat(Driver.MILLION_REQUESTS.quantity(busy, true)).isEqualTo(1_000);
+    }
 }

@@ -15,7 +15,10 @@ import java.util.function.Function;
  * Maps recommended AWS services to Azure/GCP equivalents and estimates the
  * monthly cost of each one from the usage profile:
  *
- *   cost = fixedMonthly + unitPrice × quantity(usage)
+ *   cost = fixedMonthly + unitPrice × quantity(usage, highAvailability)
+ *
+ * List-price estimates are scaled by the region's price multiplier; live and
+ * CSV prices are used as-is.
  *
  * Unit price sources:
  *  - AWS:   list-price estimate (AWS Price List Query API requires SigV4-signed
@@ -40,6 +43,12 @@ public class CostService {
     }
 
     public Map<String, Object> process(List<String> awsServices, UsageProfile usage) {
+        return process(awsServices, usage, Region.US, false);
+    }
+
+    public Map<String, Object> process(List<String> awsServices, UsageProfile usage,
+                                       Region region, boolean highAvailability) {
+        Sizing sizing = new Sizing(usage, region, highAvailability);
 
         List<String> azure = new ArrayList<>();
         List<String> gcp = new ArrayList<>();
@@ -51,11 +60,11 @@ public class CostService {
             }
         }
 
-        List<Map<String, Object>> awsItems = price(awsServices, ServiceCatalog.AWS_PRICES, usage,
+        List<Map<String, Object>> awsItems = price(awsServices, ServiceCatalog.AWS_PRICES, sizing,
                 s -> Optional.empty(), null);
-        List<Map<String, Object>> azureItems = price(azure, ServiceCatalog.AZURE_PRICES, usage,
-                this::liveAzurePrice, "live");
-        List<Map<String, Object>> gcpItems = price(gcp, ServiceCatalog.GCP_PRICES, usage,
+        List<Map<String, Object>> azureItems = price(azure, ServiceCatalog.AZURE_PRICES, sizing,
+                s -> liveAzurePrice(s, region), "live");
+        List<Map<String, Object>> gcpItems = price(gcp, ServiceCatalog.GCP_PRICES, sizing,
                 gcpPricing::getUnitPrice, "csv");
 
         double awsTotal = total(awsItems);
@@ -74,6 +83,8 @@ public class CostService {
         result.put("cost", Map.of("aws", awsTotal, "azure", azureTotal, "gcp", gcpTotal));
         result.put("breakdown", Map.of("aws", awsItems, "azure", azureItems, "gcp", gcpItems));
         result.put("usage", usage.toMap());
+        result.put("region", region.toMap());
+        result.put("highAvailability", highAvailability);
         result.put("best", best);
         result.put("pricingSource", Map.of(
                 "aws", ESTIMATE,
@@ -83,9 +94,11 @@ public class CostService {
         return result;
     }
 
-    private Optional<Double> liveAzurePrice(String service) {
+    private record Sizing(UsageProfile usage, Region region, boolean highAvailability) {}
+
+    private Optional<Double> liveAzurePrice(String service, Region region) {
         if (!azurePricing.supports(service)) return Optional.empty();
-        Optional<Double> price = azurePricing.getUnitPrice(service);
+        Optional<Double> price = azurePricing.getUnitPrice(service, region.azure());
         if (price.isEmpty()) {
             meters.counter("pricing.azure.fallbacks", "service", service).increment();
         }
@@ -94,7 +107,7 @@ public class CostService {
 
     /** One line item per known service; unknown services are skipped. */
     private List<Map<String, Object>> price(List<String> services, Map<String, PriceRule> catalog,
-                                            UsageProfile usage, Function<String, Optional<Double>> live,
+                                            Sizing sizing, Function<String, Optional<Double>> live,
                                             String liveSource) {
         List<Map<String, Object>> items = new ArrayList<>();
         for (String service : services) {
@@ -102,8 +115,8 @@ public class CostService {
             if (rule == null) continue;
 
             Optional<Double> livePrice = live.apply(service);
-            double unitPrice = livePrice.orElse(rule.unitPrice());
-            double quantity = rule.driver().quantity(usage);
+            double unitPrice = livePrice.orElse(round(rule.unitPrice() * sizing.region().priceMultiplier(), 4));
+            double quantity = rule.driver().quantity(sizing.usage(), sizing.highAvailability());
 
             Map<String, Object> item = new LinkedHashMap<>();
             item.put("service", service);
@@ -126,6 +139,11 @@ public class CostService {
     }
 
     private static double round(double v) {
-        return Math.round(v * 100.0) / 100.0;
+        return round(v, 2);
+    }
+
+    private static double round(double v, int places) {
+        double f = Math.pow(10, places);
+        return Math.round(v * f) / f;
     }
 }

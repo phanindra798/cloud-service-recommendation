@@ -1,5 +1,6 @@
 package com.cloudrec.service;
 
+import com.cloudrec.service.pricing.Requirements;
 import com.cloudrec.service.pricing.ServiceCatalog;
 import com.cloudrec.service.pricing.UsageProfile;
 import com.fasterxml.jackson.databind.JsonNode;
@@ -55,6 +56,10 @@ public class GeminiService {
                                UsageProfile usage, boolean fromFallback) {}
 
     public GeminiResult getRecommendation(String input) {
+        return getRecommendation(input, Requirements.NONE);
+    }
+
+    public GeminiResult getRecommendation(String input, Requirements requirements) {
         try {
             List<String> supported = ServiceCatalog.SUPPORTED_AWS_SERVICES;
 
@@ -74,7 +79,7 @@ public class GeminiService {
                       Example format: graph TD; User-->CloudFront; CloudFront-->EC2; EC2-->RDS;
 
                     User requirement: %s
-                    """.formatted(String.join(", ", supported), input);
+                    %s""".formatted(String.join(", ", supported), input, constraints(requirements));
 
             ObjectNode body = mapper.createObjectNode();
             ArrayNode contents = body.putArray("contents");
@@ -149,6 +154,12 @@ public class GeminiService {
             log.warn("Gemini call failed, using fallback: {}", e.toString());
             return fallback("exception");
         }
+    }
+
+    /** Extra lines for details the user picked in the form, so the design fits them. */
+    static String constraints(Requirements requirements) {
+        String described = requirements.describe();
+        return described.isEmpty() ? "" : "Known constraints (honour these and reflect them in usage): " + described + "\n";
     }
 
     /** Falls back to the default profile if the estimate is missing or incomplete. */

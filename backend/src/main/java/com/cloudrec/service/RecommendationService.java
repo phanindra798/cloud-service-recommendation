@@ -1,6 +1,8 @@
 package com.cloudrec.service;
 
 import com.cloudrec.service.pricing.CostService;
+import com.cloudrec.service.pricing.Requirements;
+import com.cloudrec.service.pricing.UsageResolver;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.Timer;
 import org.springframework.stereotype.Service;
@@ -21,12 +23,20 @@ public class RecommendationService {
         this.meters = meters;
     }
 
-    public Map<String, Object> getRecommendation(String input) {
+    public Map<String, Object> getRecommendation(String input, Requirements requirements) {
         Timer.Sample sample = Timer.start(meters);
 
-        GeminiService.GeminiResult result = geminiService.getRecommendation(input);
+        GeminiService.GeminiResult result = geminiService.getRecommendation(input, requirements);
+        UsageResolver.Resolved resolved = UsageResolver.resolve(requirements, result.usage());
 
-        Map<String, Object> response = new HashMap<>(costService.process(result.services(), result.usage()));
+        Map<String, Object> response = new HashMap<>(costService.process(result.services(), resolved.usage(),
+                requirements.regionOrDefault(), requirements.highAvailability()));
+        @SuppressWarnings("unchecked")
+        Map<String, Object> usage = (Map<String, Object>) response.get("usage");
+        usage.put("sources", resolved.sources());
+        if (requirements.appType() != null) {
+            usage.put("appType", requirements.appType().label());
+        }
         response.put("reasoning", result.reasoning());
         response.put("mermaid", result.mermaid());
         response.put("aiGenerated", !result.fromFallback());
