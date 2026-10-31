@@ -12,6 +12,7 @@ import org.springframework.test.web.servlet.MockMvc;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
@@ -77,6 +78,34 @@ class AuthControllerTest {
         register("alice@example.com", "secret123");
 
         login("alice@example.com", "wrong-password").andExpect(status().isUnauthorized());
+    }
+
+    @Test
+    void fiveWrongPasswordsLockTheAccount() throws Exception {
+        register("locked@example.com", "secret123");
+        for (int i = 0; i < 5; i++) {
+            login("locked@example.com", "wrong-password").andExpect(status().isUnauthorized());
+        }
+
+        // Even the right password is refused while locked
+        login("locked@example.com", "secret123")
+                .andExpect(status().isTooManyRequests())
+                .andExpect(header().string("Retry-After", "900"))
+                .andExpect(content().string("Too many failed attempts. Try again in 15 minutes"));
+    }
+
+    @Test
+    void successfulLoginResetsTheFailureCount() throws Exception {
+        register("reset@example.com", "secret123");
+        for (int i = 0; i < 4; i++) {
+            login("reset@example.com", "wrong-password");
+        }
+        login("reset@example.com", "secret123").andExpect(status().isOk());
+        for (int i = 0; i < 4; i++) {
+            login("reset@example.com", "wrong-password");
+        }
+
+        login("reset@example.com", "secret123").andExpect(status().isOk());
     }
 
     @Test
