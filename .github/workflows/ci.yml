@@ -66,3 +66,27 @@ jobs:
         with:
           name: frontend-coverage
           path: frontend/coverage
+
+  docker:
+    name: Docker Compose (end-to-end)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Create .env
+        run: echo "JWT_SECRET=$(openssl rand -base64 48)" > .env
+
+      # Builds both images and waits until Postgres and the backend report healthy
+      - name: Build and start the stack
+        run: docker compose up -d --build --wait --wait-timeout 300
+
+      - name: Smoke test through nginx
+        run: scripts/smoke-test.sh
+
+      - name: Show logs on failure
+        if: failure()
+        run: docker compose logs --no-color
+
+      - name: Stop
+        if: always()
+        run: docker compose down -v
