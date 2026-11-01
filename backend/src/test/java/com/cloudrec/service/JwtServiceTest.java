@@ -3,6 +3,7 @@ package com.cloudrec.service;
 import org.junit.jupiter.api.Test;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 class JwtServiceTest {
 
@@ -39,6 +40,14 @@ class JwtServiceTest {
         String token = shortLived.generateToken("alice@example.com");
 
         assertThat(jwt.validateAndGetEmail(token)).isNull();
+    }
+
+    @Test
+    void refusesToStartWithoutAStrongSecret() {
+        assertThatThrownBy(() -> new JwtService("", 60_000)).isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("JWT_SECRET");
+        assertThatThrownBy(() -> new JwtService(null, 60_000)).isInstanceOf(IllegalStateException.class);
+        assertThatThrownBy(() -> new JwtService("x".repeat(31), 60_000)).isInstanceOf(IllegalStateException.class);
     }
 
     @Test

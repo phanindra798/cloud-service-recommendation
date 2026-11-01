@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from "react";
 import { useNavigate } from "react-router-dom";
-import { API_BASE } from "../lib/api";
-import { authHeader, clearAuth } from "../lib/auth";
+import { apiFetch } from "../lib/api";
+import { clearAuth } from "../lib/auth";
 import ResultView from "../components/ResultView";
 import HistoryPanel from "../components/HistoryPanel";
 import FollowUpQuestions from "../components/FollowUpQuestions";
@@ -27,6 +27,18 @@ export default function HomePage() {
   const [followUp, setFollowUp] = useState(null);
   const navigate = useNavigate();
   const resultRef = useRef(null);
+
+  // The cookie may have expired since the last visit; this also primes the CSRF cookie.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await apiFetch("/auth/me");
+        if (!cancelled && res && res.status === 401) { clearAuth(); navigate("/login"); }
+      } catch { /* backend unreachable: the first real request will report it */ }
+    })();
+    return () => { cancelled = true; };
+  }, [navigate]);
 
   useEffect(() => {
     const id = setInterval(() => setPlaceholderIndex((i) => (i + 1) % PLACEHOLDERS.length), 3500);
@@ -63,9 +75,9 @@ export default function HomePage() {
     setFollowUp(null);
     setLoading(true); setError(null); setResult(null); setAnimateResult(false);
     try {
-      const res = await fetch(`${API_BASE}/api/recommend`, {
+      const res = await apiFetch("/api/recommend", {
         method: "POST",
-        headers: { "Content-Type": "application/json", ...authHeader() },
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
       });
       if (res.status === 401 || res.status === 403) {

@@ -6,6 +6,7 @@ import com.cloudrec.service.JwtService;
 import com.cloudrec.service.pricing.AppType;
 import com.cloudrec.service.pricing.Region;
 import com.cloudrec.service.pricing.UsageProfile;
+import jakarta.servlet.http.Cookie;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -29,6 +30,7 @@ import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
+import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.csrf;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
@@ -76,6 +78,26 @@ class RecommendationControllerTest {
     @Test
     void historyRequiresAuthentication() throws Exception {
         mvc.perform(get("/api/history")).andExpect(status().isUnauthorized());
+    }
+
+    @Test
+    void cookieSessionWritesNeedTheCsrfToken() throws Exception {
+        Cookie auth = new Cookie("auth_token", jwt.generateToken("alice@example.com"));
+
+        mvc.perform(post("/api/recommend").cookie(auth)
+                        .contentType(MediaType.APPLICATION_JSON).content("{\"problem\":\"x\"}"))
+                .andExpect(status().isForbidden());
+        verify(gemini, never()).getRecommendation(anyString(), any());
+
+        mvc.perform(post("/api/recommend").cookie(auth).with(csrf())
+                        .contentType(MediaType.APPLICATION_JSON).content("{\"problem\":\"x\"}"))
+                .andExpect(status().isOk());
+    }
+
+    @Test
+    void cookieSessionCanReadWithoutCsrf() throws Exception {
+        mvc.perform(get("/api/history").cookie(new Cookie("auth_token", jwt.generateToken("alice@example.com"))))
+                .andExpect(status().isOk());
     }
 
     @Test

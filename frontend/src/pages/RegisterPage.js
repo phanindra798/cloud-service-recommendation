@@ -1,7 +1,7 @@
 import { useState, useEffect } from "react";
 import { useNavigate, Link } from "react-router-dom";
 import { getAuth } from "../lib/auth";
-import { API_BASE } from "../lib/api";
+import { apiFetch } from "../lib/api";
 
 export default function RegisterPage() {
   const [email, setEmail]       = useState("");
@@ -20,8 +20,8 @@ export default function RegisterPage() {
 
   const pwStrength = () => {
     if (password.length === 0) return null;
-    if (password.length < 6)  return "weak";
-    if (password.length < 10) return "good";
+    if (password.length < 8)  return "weak";
+    if (password.length < 12) return "good";
     return "strong";
   };
 
@@ -30,11 +30,11 @@ export default function RegisterPage() {
   const handleSubmit = async (e) => {
     e.preventDefault();
     if (!email.trim() || !password || !confirm) { setError("All fields are required."); return; }
-    if (password.length < 6)  { setError("Password must be at least 6 characters."); return; }
+    if (password.length < 8)  { setError("Password must be at least 8 characters."); return; }
     if (password !== confirm) { setError("Passwords do not match."); return; }
     setLoading(true); setError(null);
     try {
-      const res = await fetch(`${API_BASE}/auth/register`, {
+      const res = await apiFetch("/auth/register", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ email: email.trim(), password }),
@@ -124,7 +124,7 @@ export default function RegisterPage() {
                   id="reg-password"
                   className="auth-input auth-input--pw"
                   type={showPw ? "text" : "password"}
-                  placeholder="Min. 6 characters"
+                  placeholder="Min. 8 characters"
                   value={password}
                   onChange={(e) => { setPassword(e.target.value); setError(null); }}
                   disabled={loading}

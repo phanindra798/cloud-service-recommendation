@@ -75,6 +75,17 @@ class AuthServiceTest {
         assertThatThrownBy(() -> service.login("nobody@example.com", "secret123")).isInstanceOf(RuntimeException.class);
     }
 
+    @Test
+    void unknownUserStillPaysForAPasswordCheck() {
+        PasswordEncoder spy = org.mockito.Mockito.spy(encoder);
+        AuthService service = new AuthService(repo, spy);
+        when(repo.findByEmail("nobody@example.com")).thenReturn(Optional.empty());
+
+        assertThatThrownBy(() -> service.login("nobody@example.com", "secret123"));
+
+        verify(spy).matches(org.mockito.ArgumentMatchers.eq("secret123"), org.mockito.ArgumentMatchers.anyString());
+    }
+
     private User user(String email, String rawPassword) {
         User u = new User();
         u.setEmail(email);

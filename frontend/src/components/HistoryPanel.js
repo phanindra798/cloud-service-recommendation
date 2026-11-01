@@ -1,6 +1,5 @@
 import { useState, useEffect, useCallback } from "react";
-import { API_BASE } from "../lib/api";
-import { authHeader } from "../lib/auth";
+import { apiFetch } from "../lib/api";
 
 // Collapsible list of the user's past recommendations.
 // Clicking an entry reloads that result via onSelect(problem, result).
@@ -10,7 +9,7 @@ export default function HistoryPanel({ onSelect, refreshKey }) {
 
   const load = useCallback(async () => {
     try {
-      const res = await fetch(`${API_BASE}/api/history`, { headers: authHeader() });
+      const res = await apiFetch("/api/history");
       if (res.ok) setItems(await res.json());
     } catch { /* history is non-critical */ }
   }, []);

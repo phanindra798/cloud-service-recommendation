@@ -5,6 +5,7 @@ import com.cloudrec.repository.RecommendationHistoryRepository;
 import com.cloudrec.repository.UserRepository;
 import com.cloudrec.service.GeminiService;
 import com.cloudrec.service.pricing.UsageProfile;
+import jakarta.servlet.http.Cookie;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -25,6 +26,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.when;
+import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.csrf;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
@@ -64,20 +66,19 @@ class PostgresIntegrationTest {
                         .content("{\"email\":\"pg@example.com\",\"password\":\"secret123\"}"))
                 .andExpect(status().isOk());
 
-        String loginJson = mvc.perform(post("/auth/login").contentType(MediaType.APPLICATION_JSON)
+        Cookie auth = mvc.perform(post("/auth/login").contentType(MediaType.APPLICATION_JSON)
                         .content("{\"email\":\"pg@example.com\",\"password\":\"secret123\"}"))
                 .andExpect(status().isOk())
-                .andReturn().getResponse().getContentAsString();
-        String token = loginJson.replaceAll(".*\"token\"\\s*:\\s*\"([^\"]+)\".*", "$1");
+                .andReturn().getResponse().getCookie("auth_token");
 
-        mvc.perform(post("/api/recommend").header("Authorization", "Bearer " + token)
+        mvc.perform(post("/api/recommend").cookie(auth).with(csrf())
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"problem\":\"an online bookstore\"}"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.aws[0]").value("EC2"))
                 .andExpect(jsonPath("$.cost.aws").value(45.37));
 
-        mvc.perform(get("/api/history").header("Authorization", "Bearer " + token))
+        mvc.perform(get("/api/history").cookie(auth))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$[0].problem").value("an online bookstore"));
 

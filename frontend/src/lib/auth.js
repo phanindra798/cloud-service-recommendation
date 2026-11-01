@@ -1,17 +1,17 @@
-// JWT auth helpers — token and email live in localStorage.
+// The session itself lives in an httpOnly cookie that scripts can't read.
+// Only the signed-in email is kept here, to drive the UI; the backend decides
+// who is actually signed in (a 401 means the cookie is missing or expired).
 
 export function getAuth() {
   const email = localStorage.getItem("auth_email");
-  const token = localStorage.getItem("auth_token");
-  return email && token ? { email, token } : null;
+  return email ? { email } : null;
 }
 
-export function authHeader() {
-  const auth = getAuth();
-  return auth ? { Authorization: `Bearer ${auth.token}` } : {};
+export function setAuth(email) {
+  localStorage.setItem("auth_email", email);
 }
 
 export function clearAuth() {
   localStorage.removeItem("auth_email");
-  localStorage.removeItem("auth_token");
+  localStorage.removeItem("auth_token"); // left behind by older versions
 }
