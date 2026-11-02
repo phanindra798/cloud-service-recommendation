@@ -47,7 +47,9 @@ those services fit, and a generated architecture diagram.
   is and whether it must stay up, with tap-to-select chips. Questions the
   description already answers ("a chat app for 50k users in India") are
   skipped, and every question can be skipped
-- **Tested** — 112 backend tests (JUnit 5, Mockito, MockMvc, Testcontainers
+- **One-command setup** — `docker compose up` runs PostgreSQL, the backend and
+  an nginx frontend; CI builds the images and smoke-tests the running stack
+- **Tested** — 113 backend tests (JUnit 5, Mockito, MockMvc, Testcontainers
   PostgreSQL) with a JaCoCo coverage gate, and 47 frontend tests (Jest,
   React Testing Library), run on every push by GitHub Actions
 - **Graceful degradation** — if Gemini or a pricing API is down, the app
@@ -93,14 +95,19 @@ is the React UI. Each has its own build tool (Maven / npm).
 │   ├── src/main/resources/
 │   │   ├── application.properties
 │   │   └── pricing/         optional gcp-prices.csv goes here
-│   ├── Dockerfile
+│   ├── Dockerfile           multi-stage: JDK build → JRE runtime, non-root
 │   └── pom.xml
 ├── frontend/
-│   └── src/
-│       ├── lib/             API base URL, auth helpers
-│       ├── components/      AppShell, ResultView, MermaidDiagram, HistoryPanel
-│       ├── pages/           Home, Login, Register
-│       └── App.js           routes
+│   ├── src/
+│   │   ├── lib/             API client (cookies + CSRF), auth, follow-up questions
+│   │   ├── components/      AppShell, ResultView, FollowUpQuestions, MermaidDiagram, HistoryPanel
+│   │   ├── pages/           Home, Login, Register
+│   │   ├── setupProxy.js    dev server → backend proxy
+│   │   └── App.js           routes
+│   ├── Dockerfile           multi-stage: Node build → nginx
+│   └── nginx.conf           serves the app, proxies /api and /auth (one origin)
+├── scripts/smoke-test.sh    end-to-end check against a running stack
+├── docker-compose.yml       Postgres + backend + nginx frontend
 ├── .env.example
 └── README.md
 ```
@@ -115,7 +122,40 @@ is the React UI. Each has its own build tool (Maven / npm).
 | AI         | Google Gemini (structured output mode) |
 | Pricing    | Azure Retail Prices API (live), GCP CSV, AWS baseline |
 
-## Running locally
+## Quick start with Docker
+
+You only need Docker. One command builds and starts PostgreSQL, the backend
+and the frontend:
+
+```bash
+cp .env.example .env
+```
+
+Put a secret in `.env` (`JWT_SECRET=` followed by the output of
+`openssl rand -base64 48`) and, optionally, your `GEMINI_API_KEY`. Then:
+
+```bash
+docker compose up --build
+```
+
+Open http://localhost:3000. nginx serves the React app and proxies `/api`
+and `/auth` to the backend on the same origin, which the `SameSite=Strict`
+auth cookie requires. Data lives in the `pgdata` volume; `docker compose down -v`
+wipes it.
+
+```
+browser ──► nginx :3000 ──┬── /            React build (static)
+                          └── /api, /auth ──► Spring Boot :8080 ──► PostgreSQL
+```
+
+To check a running stack end to end (register, login cookie, CSRF,
+recommendation, history, logout):
+
+```bash
+scripts/smoke-test.sh
+```
+
+## Running locally without Docker
 
 You need Java 17+, Node 18+, and PostgreSQL (Docker is the easy way).
 You'll also need a free Gemini API key from
@@ -168,7 +208,8 @@ npm install
 npm start
 ```
 
-Open http://localhost:3000, register an account and try a prompt.
+Open http://localhost:3000, register an account and try a prompt. The dev
+server forwards API calls to the backend on :8080 (see `src/setupProxy.js`).
 
 ## How costs are estimated
 
@@ -268,9 +309,12 @@ result view, the Mermaid diagram fallback and the history panel.
 
 ### CI
 
-`.github/workflows/ci.yml` runs both suites, the production frontend build,
-and uploads both coverage reports on every push to `main` and every pull
-request.
+`.github/workflows/ci.yml` runs on every push to `main` and every pull request:
+
+- **backend** — `mvn verify` (tests, Testcontainers PostgreSQL, JaCoCo gate)
+- **frontend** — Jest tests with coverage and the production build
+- **docker** — builds both images, starts the full stack with
+  `docker compose up --wait`, and runs `scripts/smoke-test.sh` through nginx
 
 ## Security
 

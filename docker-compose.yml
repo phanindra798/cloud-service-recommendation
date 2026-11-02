@@ -1,0 +1,48 @@
+# One command for the whole stack:  docker compose up --build
+# Then open http://localhost:3000  (needs JWT_SECRET in .env — see .env.example)
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-csr}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-csrpass}
+      POSTGRES_DB: ${POSTGRES_DB:-csrdb}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  backend:
+    build: ./backend
+    environment:
+      DB_URL: jdbc:postgresql://db:5432/${POSTGRES_DB:-csrdb}
+      DB_USERNAME: ${POSTGRES_USER:-csr}
+      DB_PASSWORD: ${POSTGRES_PASSWORD:-csrpass}
+      JWT_SECRET: ${JWT_SECRET:?Set JWT_SECRET in .env (openssl rand -base64 48)}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}        # optional: without it you get the baseline recommendation
+      COOKIE_SECURE: ${COOKIE_SECURE:-true}
+      FORWARD_HEADERS_STRATEGY: native            # trust X-Forwarded-For from the nginx container
+    depends_on:
+      db:
+        condition: service_healthy
+    healthcheck:
+      # The JRE image has no curl; bash can still speak HTTP
+      test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/localhost/8080 && printf 'GET /actuator/health HTTP/1.0\\r\\n\\r\\n' >&3 && grep -q UP <&3"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+      start_period: 20s
+
+  frontend:
+    build: ./frontend
+    ports:
+      - "${APP_PORT:-3000}:80"
+    depends_on:
+      backend:
+        condition: service_healthy
+
+volumes:
+  pgdata:
