@@ -157,7 +157,7 @@ scripts/smoke-test.sh
 
 ## Running locally without Docker
 
-You need Java 17+, Node 18+, and PostgreSQL (Docker is the easy way).
+You need Java 17+, Node 22+, and PostgreSQL (Docker is the easy way).
 You'll also need a free Gemini API key from
 [aistudio.google.com](https://aistudio.google.com) — no card required.
 

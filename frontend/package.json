@@ -48,5 +48,8 @@
   },
   "devDependencies": {
     "http-proxy-middleware": "^2.0.9"
+  },
+  "engines": {
+    "node": ">=22"
   }
 }
